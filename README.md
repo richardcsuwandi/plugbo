@@ -2,12 +2,13 @@
 
 A modular framework for **agentic Bayesian optimization**.
 
-Standard BO fixes a configuration $c = (M, \alpha, B, O, C)$ before the first
-evaluation, then only updates the posterior as trials accumulate. Even methods
-that adapt at runtime follow a schedule chosen in advance. Agentic BO keeps the
-GP posterior and lets an LLM revise $c_{t}$ between evaluations [[1]](#ref-1).
-The trial log $D_{t}$ is independent of the live configuration, so changing
-$c_{t}$ does not discard data.
+Bayesian optimization (BO) uses a probabilistic surrogate to choose each
+evaluation, but its overall search strategy is usually fixed in advance.
+Agentic BO places an LLM agent at the center of the loop: it reviews trial data,
+surrogate diagnostics, and natural-language context, then decides how to search
+next. As evidence accumulates, the agent can query or override backend
+suggestions and revise the surrogate, acquisition function, search bounds,
+objectives, or constraints [[1]](#ref-1).
 
 Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
 instantiates that idea as Sara, a campaign LLM, calling lenz, a BoTorch CLI that
@@ -20,8 +21,7 @@ instead of adding a second agent.
 
 ![AlphaBO architecture](assets/architecture.svg)
 
-This is an independent re-implementation of Sara and lenz [[1]](#ref-1). It is
-not an official Meta repository. The original paper has not released code.
+This is an independent re-implementation of Sara and lenz [[1]](#ref-1). It is not an official Meta repository.
 
 The plugin protocol is new in this implementation. Methods wrap as backend
 capabilities the agent invokes:
