@@ -43,9 +43,8 @@ if [ "$PROVIDER" = "openai-compatible" ] && [ -z "$BASE_URL" ]; then
   exit 1
 fi
 
-# True iff $1 is a benchmark name known to be constrained -- used to
-# auto-skip the cake condition (cake doesn't support constrained studies)
-# without paying gp_sample's full multi-start f_opt search just to check.
+# True iff $1 is a benchmark name known to be constrained (used by scripts
+# that want to label constrained runs in log output).
 is_constrained_benchmark() {
   [ "$1" = "constrained_hartmann6" ]
 }

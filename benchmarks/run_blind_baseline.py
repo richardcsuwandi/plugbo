@@ -90,11 +90,6 @@ def run_blind_baseline(
     if seed is not None:
         create_args += ["--seed", str(seed)]
     if built["constraints"]:
-        if "cake" in create_args:
-            raise ValueError(
-                "this benchmark is constrained, and surrogate 'cake' only supports single-objective, "
-                "unconstrained studies -- pick a policy/--surrogate that isn't 'cake'"
-            )
         create_args += ["--constraints", json.dumps(built["constraints"])]
     n_warm = warmup_n(len(ob.param_names), seed, warmup)
     already = create_and_warmup(sandbox, ob.unit_space_json(), create_args, n_warm, budget)

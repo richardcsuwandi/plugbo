@@ -26,8 +26,7 @@
 #
 # --config selects the single backend used for all three conditions:
 #   sara-lenz       (default) -- sara + lenz, cake off
-#   sara-lenz-cake  -- sara + lenz + cake (skips all 3 conditions if the
-#                      benchmark is constrained -- cake doesn't support that)
+#   sara-lenz-cake  -- sara + lenz + cake
 #   vanilla         -- lenz only, no LLM. Revealing identity is a no-op for
 #                      a non-agentic policy (it never reads context.md), so
 #                      only the shift matters here -- this condition mainly
@@ -96,11 +95,6 @@ ACQF="${ACQF:-noisy_logei}"
 ONE_SHOT_TOL="${ONE_SHOT_TOL:-0.01}"
 
 source scripts/_compare_env.sh
-
-if [ "$CONFIG" = "sara-lenz-cake" ] && is_constrained_benchmark "$BENCHMARK"; then
-  echo "error: benchmark '$BENCHMARK' is constrained, and surrogate 'cake' only supports single-objective, unconstrained studies -- pick --config sara-lenz or vanilla instead" >&2
-  exit 1
-fi
 
 echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED acqf=$ACQF config=$CONFIG provider=$PROVIDER model=$MODEL base_url=${BASE_URL:-<default>}"
 echo

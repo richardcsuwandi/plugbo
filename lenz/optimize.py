@@ -127,11 +127,11 @@ def suggest(
         bounds = active_bounds(frame, encoder)
 
     plain_call = bounds_override is None and around is None
-    if plain_call and frame.shelf.surrogate == "cake" and not needs_warmup(frame, encoder):
+    if plain_call and cake_module.can_use_baker(frame) and not needs_warmup(frame, encoder):
         try:
             return cake_module.baker_suggest(frame, encoder, q, _pending_X(frame, encoder))
         except cake_module.CakeNotReadyError:
-            pass  # population not evolved yet -- fall through to the regular path below
+            pass  # populations not ready -- fall back to best kernel per metric below
 
     if frame.shelf.acqf == "sobol" or needs_warmup(frame, encoder):
         configs, drawn = sobol_candidates(
@@ -181,11 +181,11 @@ def suggest(
 
 
 def score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[str]) -> list[dict]:
-    if frame.shelf.surrogate == "cake":
+    if frame.shelf.surrogate == "cake" and cake_module.can_use_baker(frame):
         try:
             return cake_module.baker_score(frame, encoder, configs, acqf_names)
         except cake_module.CakeNotReadyError:
-            pass  # population not evolved yet -- fall through to the regular path below
+            pass  # populations not ready -- fall back to best kernel per metric below
 
     model_set = build_model_set(frame, encoder)
     X_pending = _pending_X(frame, encoder)

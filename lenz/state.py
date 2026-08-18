@@ -67,8 +67,10 @@ class Shelf:
     kernel_freeze_fraction: float = 0.5
     kernel_num_crossover: int = 1
     kernel_mutation_prob: float = 0.7
-    kernel_population: list[dict] = field(default_factory=list)  # [{"expression", "bic", "generation"}]
-    kernel_evolution_state: dict = field(default_factory=_default_kernel_evolution_state)
+    # Per-metric kernel populations: one CAKE instance per objective metric and
+    # per constraint metric. Values: [{"expression", "bic", "generation"}, ...]
+    kernel_populations: dict[str, list[dict]] = field(default_factory=dict)
+    kernel_evolution_states: dict[str, dict] = field(default_factory=dict)
 
     @property
     def is_moo(self) -> bool:
@@ -140,8 +142,8 @@ class Frame:
                 "kernel_freeze_fraction": self.shelf.kernel_freeze_fraction,
                 "kernel_num_crossover": self.shelf.kernel_num_crossover,
                 "kernel_mutation_prob": self.shelf.kernel_mutation_prob,
-                "kernel_population": self.shelf.kernel_population,
-                "kernel_evolution_state": self.shelf.kernel_evolution_state,
+                "kernel_populations": self.shelf.kernel_populations,
+                "kernel_evolution_states": self.shelf.kernel_evolution_states,
             },
             "trials": [asdict(t) for t in self.trials],
             "events": self.events,
@@ -157,8 +159,18 @@ class Frame:
             obj = json.load(f)
         space = SearchSpace.from_json(obj["space"])
         shelf_obj = obj["shelf"]
+        objectives_raw = shelf_obj.get("objectives", [])
+        kernel_populations = dict(shelf_obj.get("kernel_populations") or {})
+        kernel_evolution_states = dict(shelf_obj.get("kernel_evolution_states") or {})
+        # Migrate legacy single-population state.json files.
+        legacy_pop = shelf_obj.get("kernel_population") or []
+        legacy_state = shelf_obj.get("kernel_evolution_state")
+        if legacy_pop and objectives_raw and not kernel_populations:
+            primary = objectives_raw[0]["metric"]
+            kernel_populations[primary] = legacy_pop
+            kernel_evolution_states[primary] = legacy_state or _default_kernel_evolution_state()
         shelf = Shelf(
-            objectives=[Objective(**o) for o in shelf_obj.get("objectives", [])],
+            objectives=[Objective(**o) for o in objectives_raw],
             constraints=[Constraint(**c) for c in shelf_obj.get("constraints", [])],
             acqf=shelf_obj.get("acqf", "noisy_logei"),
             acqf_params=shelf_obj.get("acqf_params", {}),
@@ -174,8 +186,8 @@ class Frame:
             kernel_freeze_fraction=shelf_obj.get("kernel_freeze_fraction", 0.5),
             kernel_num_crossover=shelf_obj.get("kernel_num_crossover", 1),
             kernel_mutation_prob=shelf_obj.get("kernel_mutation_prob", 0.7),
-            kernel_population=shelf_obj.get("kernel_population", []),
-            kernel_evolution_state=shelf_obj.get("kernel_evolution_state", _default_kernel_evolution_state()),
+            kernel_populations=kernel_populations,
+            kernel_evolution_states=kernel_evolution_states,
         )
         trials = [Trial(**t) for t in obj.get("trials", [])]
         return cls(space=space, shelf=shelf, trials=trials, events=obj.get("events", []))

@@ -31,8 +31,7 @@ Three pieces:
 
 This is an **independent from-scratch reimplementation** of the agentic BO stack.
 The Meta paper has no released reference code. This repo is **not** an official
-Meta implementation. CAKE follows the NeurIPS algorithm (see References).
-
+Meta implementation.
 ## Install
 
 ```bash
@@ -61,16 +60,16 @@ scripted loop and command reference.
 ## CAKE (Context-Aware Kernel Evolution)
 
 CAKE evolves a GP kernel population during BO. LLMs act as crossover and
-mutation operators. **BAKER** (BIC-Acquisition Kernel Ranking) picks which
-kernel to acquire with, balancing BIC fit against the configured acquisition
-function.
+mutation operators. Each objective metric and each constraint metric gets its
+own population. **BAKER** ranks weighted kernel combinations against the
+configured acquisition function (logEI, NEHVI/EHVI, constrained EI, or
+probability-of-feasibility before any feasible point is seen). If populations
+are not ready yet, lenz falls back to the best kernel per metric.
 
 CAKE is **not** part of Sara's agent loop. It runs inside `lenz` on its own
 schedule during `observe`/`submit`, using `--kernel-llm-*` settings independent
 of Sara's provider/model. Any model supported by `llm.factory` works. Tradeoff
 is API cost and latency only.
-
-Requirements: single-objective, unconstrained studies (`--surrogate cake`).
 
 ```bash
 lenz create --state ./state.json \
@@ -127,15 +126,15 @@ The agent gets two tools (`bash`, `read`) in `--workdir`, matching the paper's
 
 ## Benchmark harness
 
-`benchmarks/` implements the paper's anti-memorization sandbox (renamed
-parameters, unit cube, shifted optimum, hidden identity) plus no-blind variants
-(identity revealed). Benchmark list:
+`benchmarks/` builds anti-memorization sandboxes: renamed parameters, unit-cube
+encoding, and a shifted optimum. Scoring uses a hidden answer key the agent never
+sees. List available functions:
 
 ```bash
 python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
 ```
 
-**Blind agent run** (scores true regret after the run):
+**Blind run** (hidden identity, scores true regret afterward):
 
 ```bash
 python3 -m benchmarks.run_blind_test \
@@ -143,7 +142,7 @@ python3 -m benchmarks.run_blind_test \
   --budget 30 --root ./results/logs/blind-1
 ```
 
-**No-blind run** (revealed identity, default budget 5 for one-shot probes):
+**Revealed run** (real benchmark name and bounds; see disclosure levels below):
 
 ```bash
 python3 -m benchmarks.run_noblind_test \
@@ -151,23 +150,41 @@ python3 -m benchmarks.run_noblind_test \
   --budget 5 --root ./results/logs/noblind-hartmann6
 ```
 
-Add `--shift` for revealed identity with a relocated optimum. **Vanilla baseline**
-(no LLM): `python3 -m benchmarks.run_blind_baseline --benchmark hartmann6
---budget 30 --root ./results/logs/vanilla --policy vanilla`
+Pass `--shift` to keep the same relocated optimum as the blind sandbox. **Vanilla
+baseline** (no LLM): `python3 -m benchmarks.run_blind_baseline --benchmark
+hartmann6 --budget 30 --root ./results/logs/vanilla --policy vanilla`
 
-Pin backend for the whole run with `--surrogate {fixed,cake}` and `--acqf`.
+Pin the backend for a whole run with `--surrogate {fixed,cake}` and `--acqf`.
 CAKE also needs `--kernel-llm-provider` and `--kernel-llm-model`.
 
 ## Compare scripts
 
-Three shell scripts overlay regret curves across condition subdirectories. Default
-budget `100`, seed `42`. Provider/model from `scripts/_compare_env.sh`.
+Three shell scripts overlay regret curves across condition folders. Defaults:
+budget `100`, seed `42`. Provider and model from `scripts/_compare_env.sh`.
 
-| Script | Varies | Output dir |
+| Script | What varies | Output dir |
 |---|---|---|
 | `run_benchmark_compare.sh <benchmark>` | backend (vanilla, sara-lenz, sara-lenz-cake) | `results/logs/<benchmark>-compare` |
 | `run_benchmark_noblind_compare.sh <benchmark> [--shift-only]` | same backends, identity revealed | `results/logs/<benchmark>-noblind-compare-3config` |
-| `run_noblind_compare.sh <benchmark> [--config …]` | disclosure (blind, shifted, unshifted) | `results/logs/<benchmark>-noblind-compare` |
+| `run_noblind_compare.sh <benchmark> [--config …]` | disclosure level (see below) | `results/logs/<benchmark>-noblind-compare` |
+
+The first two scripts hold disclosure fixed and ask which backend wins. The third
+holds the backend fixed and walks through all three disclosure levels.
+
+### Disclosure levels
+
+Used by `run_noblind_compare.sh` and the Python runners (`--shift`, revealed
+`context.md`):
+
+| Level | Identity | Optimum | Typical use |
+|---|---|---|---|
+| **Blind** | Hidden (renamed params, unit cube) | Shifted | Agentic BO with nothing to recall |
+| **Revealed + shifted** | Real name and bounds | Same shift as blind | Does recalled structure help search? |
+| **Revealed, unshifted** | Real name and bounds | Textbook location | One-shot recall probe |
+
+For an unshifted revealed probe, run `run_noblind_test` with default `--budget 5`
+and check `one_shot_success` at eval 1. Compare scripts keep budget 100 so all
+three conditions share the same x-axis on regret plots.
 
 ```bash
 ./scripts/run_benchmark_compare.sh hartmann6
@@ -233,9 +250,9 @@ pytest -m "not slow"
 1. Brunzema, T., Tiao, J., Le, T., De Angeli, G., Xuan, Y., Gligorijevic, V.
    *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch.*
    Meta, 2026.
-   [arXiv:2608.00316](https://arxiv.org/abs/2608.00316)
+   [Paper](https://arxiv.org/abs/2608.00316)
 
 2. Suwandi, R., Yin, J., Wang, Y., Li, Y., Chang, Y., Theodoridis, S.
    *Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
    LLMs.* NeurIPS 2025.
-   [PDF](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
+   [Paper](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)

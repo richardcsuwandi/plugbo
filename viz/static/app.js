@@ -1163,18 +1163,43 @@ function renderToolUse(detail) {
 function renderKernels(detail) {
   const panel = document.getElementById("panel-kernels");
   const shelf = detail.state.shelf;
-  const population = [...(shelf.kernel_population || [])].sort((a, b) => (a.bic ?? Infinity) - (b.bic ?? Infinity));
-  const bestExpr = population.length ? population[0].expression : null;
+  const populations = shelf.kernel_populations || {};
+  const legacy = shelf.kernel_population || [];
+  const targets = Object.keys(populations).length
+    ? Object.keys(populations)
+    : legacy.length
+      ? [shelf.objectives?.[0]?.metric || "objective"]
+      : [];
 
-  const currentRows = population
-    .map(
-      (m) => `<tr>
+  const cards = targets.map((target) => {
+    const population = [...(populations[target] || (targets.length === 1 && legacy.length ? legacy : []))].sort(
+      (a, b) => (a.bic ?? Infinity) - (b.bic ?? Infinity)
+    );
+    const bestExpr = population.length ? population[0].expression : null;
+    const state = shelf.kernel_evolution_states?.[target] || shelf.kernel_evolution_state || {};
+    const rows = population
+      .map(
+        (m) => `<tr>
         <td class="mono ${m.expression === bestExpr ? "kernel-best" : ""}">${escapeHtml(m.expression)}${m.expression === bestExpr ? " ★" : ""}</td>
         <td>${fmtNum(m.bic, 2)}</td>
         <td>${m.generation}</td>
       </tr>`
-    )
-    .join("");
+      )
+      .join("");
+    return `
+    <div class="card">
+      <h3>${escapeHtml(target)}</h3>
+      <div class="stat-row" style="margin-bottom:12px">
+        <div class="stat"><div class="value">${state.generation ?? 0}</div><div class="label">Generation</div></div>
+        <div class="stat"><div class="value">${state.frozen ? "Yes" : "No"}</div><div class="label">Frozen</div></div>
+        <div class="stat"><div class="value" style="font-family:ui-monospace,monospace;font-size:16px">${escapeHtml(bestExpr || "—")}</div><div class="label">Best kernel</div></div>
+      </div>
+      <table>
+        <thead><tr><th>expression</th><th>BIC (lower = better)</th><th>introduced at gen</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3" class="empty-note">No population yet — evolution hasn’t triggered.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  }).join("");
 
   const gens = detail.kernel_generations || [];
   const genRows = [...gens]
@@ -1182,6 +1207,7 @@ function renderKernels(detail) {
     .map(
       (g) => `<tr>
         <td>${g.generation}</td>
+        <td>${escapeHtml(g.target || "—")}</td>
         <td class="mono kernel-best">${escapeHtml(g.best || "—")}</td>
         <td class="mono">${escapeHtml((g.population || []).join(", "))}</td>
       </tr>`
@@ -1189,23 +1215,12 @@ function renderKernels(detail) {
     .join("");
 
   panel.innerHTML = `
-    <div class="card">
-      <h3>Current population</h3>
-      <div class="stat-row" style="margin-bottom:12px">
-        <div class="stat"><div class="value">${shelf.kernel_evolution_state?.generation ?? 0}</div><div class="label">Generation</div></div>
-        <div class="stat"><div class="value">${shelf.kernel_evolution_state?.frozen ? "Yes" : "No"}</div><div class="label">Frozen</div></div>
-        <div class="stat"><div class="value" style="font-family:ui-monospace,monospace;font-size:16px">${escapeHtml(bestExpr || "—")}</div><div class="label">Best kernel</div></div>
-      </div>
-      <table>
-        <thead><tr><th>expression</th><th>BIC (lower = better)</th><th>introduced at gen</th></tr></thead>
-        <tbody>${currentRows || '<tr><td colspan="3" class="empty-note">No population yet — evolution hasn’t triggered.</td></tr>'}</tbody>
-      </table>
-    </div>
+    ${cards || '<div class="card"><div class="empty-note">No kernel populations yet.</div></div>'}
     <div class="card">
       <h3>Evolution history</h3>
       <table>
-        <thead><tr><th>gen</th><th>best</th><th>population</th></tr></thead>
-        <tbody>${genRows || '<tr><td colspan="3" class="empty-note">No evolution rounds recorded yet.</td></tr>'}</tbody>
+        <thead><tr><th>gen</th><th>metric</th><th>best</th><th>population</th></tr></thead>
+        <tbody>${genRows || '<tr><td colspan="4" class="empty-note">No evolution rounds recorded yet.</td></tr>'}</tbody>
       </table>
     </div>
   `;

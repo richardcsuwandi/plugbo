@@ -19,7 +19,7 @@
 # Examples:
 #   ./scripts/run_benchmark_compare.sh rastrigin6
 #   ./scripts/run_benchmark_compare.sh gp_sample6 60 7
-#   ./scripts/run_benchmark_compare.sh constrained_hartmann6 100 42   # cake condition auto-skipped (unsupported for constrained studies)
+#   ./scripts/run_benchmark_compare.sh constrained_hartmann6 100 42
 #
 # Defaults to ModelScope (openai-compatible endpoint) driving Qwen models --
 # reads MODELSCOPE_API_KEY / MODELSCOPE_BASE_URL from .env at repo root.
@@ -41,10 +41,7 @@ ACQF="${ACQF:-noisy_logei}"
 
 source scripts/_compare_env.sh
 
-HAS_CONSTRAINT="no"
-is_constrained_benchmark "$BENCHMARK" && HAS_CONSTRAINT="yes"
-
-echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED acqf=$ACQF provider=$PROVIDER model=$MODEL base_url=${BASE_URL:-<default>} constrained=$HAS_CONSTRAINT"
+echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED acqf=$ACQF provider=$PROVIDER model=$MODEL base_url=${BASE_URL:-<default>}"
 echo
 
 # Never rm -rf here: $ROOT is keyed only by benchmark name, so two
@@ -63,22 +60,17 @@ python3 -m benchmarks.run_blind_test \
   --surrogate fixed --acqf "$ACQF" \
   --extra-body "$EXTRA_BODY"
 
-if [ "$HAS_CONSTRAINT" = "yes" ]; then
-  echo
-  echo "=== [2/3] sara + lenz + cake -- SKIPPED (cake doesn't support constrained studies) ==="
-else
-  echo
-  echo "=== [2/3] sara + lenz + cake ==="
-  python3 -m benchmarks.run_blind_test \
-    --benchmark "$BENCHMARK" --provider "$PROVIDER" --model "$MODEL" \
-    --base-url "$BASE_URL" --api-key "$API_KEY" \
-    --budget "$BUDGET" --seed "$SEED" --root "$ROOT/sara-lenz-cake" \
-    --surrogate cake --acqf "$ACQF" \
-    --extra-body "$EXTRA_BODY" \
-    --kernel-llm-provider "$KERNEL_LLM_PROVIDER" --kernel-llm-model "$KERNEL_LLM_MODEL" \
-    --kernel-llm-base-url "$KERNEL_LLM_BASE_URL" --kernel-llm-api-key-env "$KERNEL_LLM_API_KEY_ENV" \
-    --kernel-llm-extra-body "$KERNEL_LLM_EXTRA_BODY"
-fi
+echo
+echo "=== [2/3] sara + lenz + cake ==="
+python3 -m benchmarks.run_blind_test \
+  --benchmark "$BENCHMARK" --provider "$PROVIDER" --model "$MODEL" \
+  --base-url "$BASE_URL" --api-key "$API_KEY" \
+  --budget "$BUDGET" --seed "$SEED" --root "$ROOT/sara-lenz-cake" \
+  --surrogate cake --acqf "$ACQF" \
+  --extra-body "$EXTRA_BODY" \
+  --kernel-llm-provider "$KERNEL_LLM_PROVIDER" --kernel-llm-model "$KERNEL_LLM_MODEL" \
+  --kernel-llm-base-url "$KERNEL_LLM_BASE_URL" --kernel-llm-api-key-env "$KERNEL_LLM_API_KEY_ENV" \
+  --kernel-llm-extra-body "$KERNEL_LLM_EXTRA_BODY"
 
 echo
 echo "=== [3/3] vanilla BO (no sara, no LLM) ==="

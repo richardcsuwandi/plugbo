@@ -19,7 +19,7 @@ from gpytorch.kernels import Kernel, MaternKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.utils.warnings import GPInputWarning
 
-from .kernels import KernelParseError, parse_kernel_expression
+from . import cake
 from .space import DTYPE, Encoder
 from .state import Frame
 
@@ -93,18 +93,9 @@ class ModelSet:
         return list(self.objective_models) + list(self.constraint_models)
 
 
-def _active_covar_module(frame: Frame, d: int) -> Kernel | None:
-    """The objective's covariance module when a CAKE kernel population is
-    active: the population's current best-BIC expression (as of the last
-    evolution round -- see lenz/cake.py), or None (default Matérn) otherwise.
-    """
-    if frame.shelf.surrogate != "cake" or not frame.shelf.kernel_population:
-        return None
-    best = min(frame.shelf.kernel_population, key=lambda m: m["bic"])
-    try:
-        return parse_kernel_expression(best["expression"], d)
-    except KernelParseError:
-        return None
+def _covar_for_metric(frame: Frame, d: int, metric: str) -> Kernel | None:
+    """Per-metric CAKE kernel when a population exists for that metric."""
+    return cake.covar_module_for_metric(frame, d, metric)
 
 
 def build_model_set(frame: Frame, encoder: Encoder) -> ModelSet:
@@ -119,19 +110,23 @@ def build_model_set(frame: Frame, encoder: Encoder) -> ModelSet:
     signs: dict[str, float] = {}
     y_raw: dict[str, torch.Tensor] = {}
 
-    covar_module = _active_covar_module(frame, d=X.shape[-1])
+    d = X.shape[-1]
 
     for o in frame.shelf.objectives:
         y = torch.tensor([[_require_metric(t, o.metric)] for t in observed], dtype=DTYPE)
         sign = -1.0 if o.minimize else 1.0
         signs[o.metric] = sign
         y_raw[o.metric] = y
-        obj_models[o.metric] = fit_gp(X, y * sign, encoder.domain_bounds, covar_module=covar_module)
+        obj_models[o.metric] = fit_gp(
+            X, y * sign, encoder.domain_bounds, covar_module=_covar_for_metric(frame, d, o.metric)
+        )
 
     for c in frame.shelf.constraints:
         y = torch.tensor([[_require_metric(t, c.metric)] for t in observed], dtype=DTYPE)
         y_raw[c.metric] = y
-        con_models[c.metric] = fit_gp(X, y, encoder.domain_bounds)
+        con_models[c.metric] = fit_gp(
+            X, y, encoder.domain_bounds, covar_module=_covar_for_metric(frame, d, c.metric)
+        )
 
     return ModelSet(
         encoder=encoder,

@@ -63,9 +63,6 @@ ACQF="${ACQF:-noisy_logei}"
 
 source scripts/_compare_env.sh
 
-HAS_CONSTRAINT="no"
-is_constrained_benchmark "$BENCHMARK" && HAS_CONSTRAINT="yes"
-
 SHIFT_FLAG=()
 SHIFT_LABEL="no shift -- pure recall"
 if [ "$SHIFT_ONLY" = "1" ]; then
@@ -73,7 +70,7 @@ if [ "$SHIFT_ONLY" = "1" ]; then
   SHIFT_LABEL="shifted"
 fi
 
-echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED acqf=$ACQF provider=$PROVIDER model=$MODEL base_url=${BASE_URL:-<default>} constrained=$HAS_CONSTRAINT shift=$SHIFT_LABEL"
+echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED acqf=$ACQF provider=$PROVIDER model=$MODEL base_url=${BASE_URL:-<default>} shift=$SHIFT_LABEL"
 echo
 
 # Never rm -rf here: $ROOT is keyed only by benchmark name, so two
@@ -99,22 +96,17 @@ python3 -m benchmarks.run_noblind_test \
   --surrogate fixed --acqf "$ACQF" \
   --extra-body "$EXTRA_BODY" "${SHIFT_FLAG[@]+"${SHIFT_FLAG[@]}"}"
 
-if [ "$HAS_CONSTRAINT" = "yes" ]; then
-  echo
-  echo "=== [3/3] sara + lenz + cake -- SKIPPED (cake doesn't support constrained studies) ==="
-else
-  echo
-  echo "=== [3/3] sara + lenz + cake, identity revealed ==="
-  python3 -m benchmarks.run_noblind_test \
-    --benchmark "$BENCHMARK" --provider "$PROVIDER" --model "$MODEL" \
-    --base-url "$BASE_URL" --api-key "$API_KEY" \
-    --budget "$BUDGET" --seed "$SEED" --root "$ROOT/sara-lenz-cake" \
-    --surrogate cake --acqf "$ACQF" \
-    --extra-body "$EXTRA_BODY" "${SHIFT_FLAG[@]+"${SHIFT_FLAG[@]}"}" \
-    --kernel-llm-provider "$KERNEL_LLM_PROVIDER" --kernel-llm-model "$KERNEL_LLM_MODEL" \
-    --kernel-llm-base-url "$KERNEL_LLM_BASE_URL" --kernel-llm-api-key-env "$KERNEL_LLM_API_KEY_ENV" \
-    --kernel-llm-extra-body "$KERNEL_LLM_EXTRA_BODY"
-fi
+echo
+echo "=== [3/3] sara + lenz + cake, identity revealed ==="
+python3 -m benchmarks.run_noblind_test \
+  --benchmark "$BENCHMARK" --provider "$PROVIDER" --model "$MODEL" \
+  --base-url "$BASE_URL" --api-key "$API_KEY" \
+  --budget "$BUDGET" --seed "$SEED" --root "$ROOT/sara-lenz-cake" \
+  --surrogate cake --acqf "$ACQF" \
+  --extra-body "$EXTRA_BODY" "${SHIFT_FLAG[@]+"${SHIFT_FLAG[@]}"}" \
+  --kernel-llm-provider "$KERNEL_LLM_PROVIDER" --kernel-llm-model "$KERNEL_LLM_MODEL" \
+  --kernel-llm-base-url "$KERNEL_LLM_BASE_URL" --kernel-llm-api-key-env "$KERNEL_LLM_API_KEY_ENV" \
+  --kernel-llm-extra-body "$KERNEL_LLM_EXTRA_BODY"
 
 echo
 echo "=== plotting comparison ==="

@@ -82,37 +82,41 @@ def _toy_frame(n: int = 8, surrogate: str = "cake") -> tuple[Frame, Encoder]:
 
 def test_should_evolve_false_when_not_cake():
     frame, _ = _toy_frame(n=10, surrogate="fixed")
-    assert cake.should_evolve(frame) is False
+    assert cake.should_evolve(frame, "y") is False
 
 
 def test_should_evolve_respects_init_after():
     frame, _ = _toy_frame(n=5)
     frame.shelf.kernel_init_after = 6
-    assert cake.should_evolve(frame) is False
+    assert cake.should_evolve(frame, "y") is False
     frame, _ = _toy_frame(n=6)
     frame.shelf.kernel_init_after = 6
-    assert cake.should_evolve(frame) is True
+    assert cake.should_evolve(frame, "y") is True
 
 
 def test_should_evolve_respects_evolve_every():
     frame, _ = _toy_frame(n=9)
-    frame.shelf.kernel_population = [{"expression": "SE", "bic": 1.0, "generation": 1}]
-    frame.shelf.kernel_evolution_state = {"generation": 1, "last_evolved_at_n_observed": 6, "frozen": False}
+    frame.shelf.kernel_populations["y"] = [{"expression": "SE", "bic": 1.0, "generation": 1}]
+    frame.shelf.kernel_evolution_states["y"] = {
+        "generation": 1,
+        "last_evolved_at_n_observed": 6,
+        "frozen": False,
+    }
     frame.shelf.kernel_evolve_every = 4
-    assert cake.should_evolve(frame) is False  # 9 - 6 = 3 < 4
+    assert cake.should_evolve(frame, "y") is False  # 9 - 6 = 3 < 4
     frame.shelf.kernel_evolve_every = 3
-    assert cake.should_evolve(frame) is True  # 9 - 6 = 3 >= 3
+    assert cake.should_evolve(frame, "y") is True  # 9 - 6 = 3 >= 3
 
 
 def test_should_evolve_freezes_past_budget_fraction():
     frame, _ = _toy_frame(n=10)
     frame.shelf.budget = 20
     frame.shelf.kernel_freeze_fraction = 0.5
-    assert cake.should_evolve(frame) is False
-    assert frame.shelf.kernel_evolution_state["frozen"] is True
+    assert cake.should_evolve(frame, "y") is False
+    assert frame.shelf.kernel_evolution_states["y"]["frozen"] is True
     # frozen sticks even if evolve_every would otherwise fire again
-    frame.shelf.kernel_evolution_state["last_evolved_at_n_observed"] = 0
-    assert cake.should_evolve(frame) is False
+    frame.shelf.kernel_evolution_states["y"]["last_evolved_at_n_observed"] = 0
+    assert cake.should_evolve(frame, "y") is False
 
 
 # -- evolve_generation ---------------------------------------------------
@@ -121,34 +125,34 @@ def test_should_evolve_freezes_past_budget_fraction():
 def test_evolve_generation_seeds_population_and_updates_state():
     frame, encoder = _toy_frame(n=8)
     client = FakeClient()
-    cake.evolve_generation(frame, encoder, client)
+    cake.evolve_generation(frame, encoder, client, "y")
+    population = frame.shelf.kernel_populations["y"]
 
-    assert len(frame.shelf.kernel_population) <= frame.shelf.kernel_population_size
-    assert all(m["bic"] is not None for m in frame.shelf.kernel_population)
-    assert frame.shelf.kernel_evolution_state["generation"] == 1
-    assert frame.shelf.kernel_evolution_state["last_evolved_at_n_observed"] == 8
-    assert cake.get_best_kernel(frame) is not None
+    assert len(population) <= frame.shelf.kernel_population_size
+    assert all(m["bic"] is not None for m in population)
+    state = frame.shelf.kernel_evolution_states["y"]
+    assert state["generation"] == 1
+    assert state["last_evolved_at_n_observed"] == 8
+    assert cake.get_best_kernel(frame, "y") is not None
     assert client.calls >= 1
 
 
 def test_evolve_generation_survives_llm_failure():
     frame, encoder = _toy_frame(n=8)
     client = FakeClient(raises=RuntimeError("network exploded"))
-    cake.evolve_generation(frame, encoder, client)  # must not raise
+    cake.evolve_generation(frame, encoder, client, "y")  # must not raise
 
-    # crossover falls back to a random parent-combination on LLM failure (matches CAKE's own
-    # fallback); mutation has no fallback and is simply skipped -- either way the population
-    # ends up well-formed with a numeric bic for every member.
-    assert frame.shelf.kernel_population
-    assert all(isinstance(m["bic"], float) for m in frame.shelf.kernel_population)
-    assert frame.shelf.kernel_evolution_state["generation"] == 1
+    population = frame.shelf.kernel_populations["y"]
+    assert population
+    assert all(isinstance(m["bic"], float) for m in population)
+    assert frame.shelf.kernel_evolution_states["y"]["generation"] == 1
 
 
 def test_evolve_generation_is_upsert_not_duplicate():
     frame, encoder = _toy_frame(n=8)
     client = FakeClient(responses=["Kernel: SE\nAnalysis: x"] * 4)
-    cake.evolve_generation(frame, encoder, client)
-    expressions = [m["expression"] for m in frame.shelf.kernel_population]
+    cake.evolve_generation(frame, encoder, client, "y")
+    expressions = [m["expression"] for m in frame.shelf.kernel_populations["y"]]
     assert len(expressions) == len(set(expressions))  # no duplicate expressions
 
 
@@ -160,7 +164,7 @@ def test_maybe_evolve_skips_when_llm_not_configured():
     assert frame.shelf.kernel_llm == {}
     ran = cake.maybe_evolve(frame, encoder)
     assert ran is False
-    assert frame.shelf.kernel_population == []
+    assert frame.shelf.kernel_populations == {}
     assert frame.events[-1]["status"] == "skipped"
 
 
@@ -183,13 +187,14 @@ def test_baker_suggest_raises_when_population_empty():
 
 def test_baker_suggest_and_score_after_evolution():
     frame, encoder = _toy_frame(n=8)
-    cake.evolve_generation(frame, encoder, FakeClient())
+    cake.evolve_generation(frame, encoder, FakeClient(), "y")
+    population = frame.shelf.kernel_populations["y"]
 
     suggestions = cake.baker_suggest(frame, encoder, q=2, X_pending=None)
     assert len(suggestions) <= 2
     for s in suggestions:
         assert 0.0 <= s["config"]["x"] <= 1.0
-        assert s["kernel"] in [m["expression"] for m in frame.shelf.kernel_population]
+        assert s["kernel"] in [m["expression"] for m in population]
         assert "baker_score" in s["acquisition_values"]
 
     scores = cake.baker_score(frame, encoder, [{"x": 0.3}, {"x": 0.9}], ["noisy_logei"])
@@ -201,7 +206,7 @@ def test_suggest_dispatches_to_baker_end_to_end():
     from lenz import optimize as opt
 
     frame, encoder = _toy_frame(n=8)
-    cake.evolve_generation(frame, encoder, FakeClient())
+    cake.evolve_generation(frame, encoder, FakeClient(), "y")
 
     result = opt.suggest(frame, encoder, q=1)
     assert "kernel" in result[0]
@@ -227,7 +232,7 @@ def _run_cli(state_path, command, *args):
     return json.loads(out.stdout)
 
 
-def test_create_cake_rejects_constraints(tmp_path):
+def test_create_cake_accepts_constraints(tmp_path):
     state = tmp_path / "state.json"
     payload = _run_cli(
         state,
@@ -240,12 +245,14 @@ def test_create_cake_rejects_constraints(tmp_path):
         json.dumps([{"metric": "c1", "upper": 0.5}]),
         "--surrogate",
         "cake",
+        "--budget",
+        "20",
     )
-    assert payload["ok"] is False
-    assert "cake" in payload["error"]
+    assert payload["ok"] is True
+    assert payload["result"]["surrogate"] == "cake"
 
 
-def test_create_cake_rejects_multi_objective(tmp_path):
+def test_create_cake_accepts_multi_objective(tmp_path):
     state = tmp_path / "state.json"
     payload = _run_cli(
         state,
@@ -256,8 +263,55 @@ def test_create_cake_rejects_multi_objective(tmp_path):
         json.dumps({"y1": "minimize", "y2": "maximize"}),
         "--surrogate",
         "cake",
+        "--acqf",
+        "nehvi",
+        "--budget",
+        "20",
     )
-    assert payload["ok"] is False
+    assert payload["ok"] is True
+
+
+def test_evolve_generation_per_constraint_metric():
+    from lenz.state import Constraint
+
+    frame, encoder = _toy_frame(n=8)
+    frame.shelf.constraints = [Constraint(metric="c1", upper=0.5)]
+    for i, t in enumerate(frame.observed_trials()):
+        t.metrics["c1"] = 0.1 + i * 0.05
+    client = FakeClient()
+    cake.evolve_generation(frame, encoder, client, "y")
+    cake.evolve_generation(frame, encoder, client, "c1")
+    assert "y" in frame.shelf.kernel_populations
+    assert "c1" in frame.shelf.kernel_populations
+    assert cake.get_best_kernel(frame, "c1") is not None
+
+
+def test_baker_constrained_uses_objective_and_constraint_kernels():
+    from lenz import optimize as opt
+    from lenz.state import Constraint
+
+    frame, encoder = _toy_frame(n=8)
+    frame.shelf.constraints = [Constraint(metric="c1", upper=0.5)]
+    for i, t in enumerate(frame.observed_trials()):
+        t.metrics["c1"] = 0.1 + i * 0.02
+    client = FakeClient()
+    cake.evolve_generation(frame, encoder, client, "y")
+    cake.evolve_generation(frame, encoder, client, "c1")
+
+    result = opt.suggest(frame, encoder, q=1)
+    assert "kernel" in result[0]
+    assert "baker_score" in result[0]["acquisition_values"]
+
+
+def test_kernel_combos_single_target_is_full_population():
+    frame, encoder = _toy_frame(n=8)
+    client = FakeClient()
+    cake.evolve_generation(frame, encoder, client, "y")
+    observed = frame.observed_trials()
+    X = __import__("torch").stack([encoder.encode(t.config) for t in observed])
+    prepared = cake._prepared_populations(frame, encoder, X, observed, ["y"])
+    combos = cake._kernel_combos(prepared)
+    assert len(combos) == len(frame.shelf.kernel_populations["y"])
 
 
 def test_create_cake_ok_single_objective_unconstrained(tmp_path):

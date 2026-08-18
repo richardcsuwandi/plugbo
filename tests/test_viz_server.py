@@ -14,7 +14,8 @@ from viz.server import (
 )
 
 
-def _write_state(path, objectives, trials, events=None, surrogate="fixed", kernel_population=None):
+def _write_state(path, objectives, trials, events=None, surrogate="fixed", kernel_populations=None):
+    pops = kernel_populations or {}
     state = {
         "space": {"x": {"kind": "range", "lower": 0.0, "upper": 1.0, "type": "float"}},
         "shelf": {
@@ -24,7 +25,8 @@ def _write_state(path, objectives, trials, events=None, surrogate="fixed", kerne
             "acqf_params": {},
             "bounds": {},
             "surrogate": surrogate,
-            "kernel_population": kernel_population or [],
+            "kernel_populations": pops,
+            "kernel_evolution_states": {"y": {"generation": 1, "frozen": False}} if pops else {},
         },
         "trials": trials,
         "events": events or [],

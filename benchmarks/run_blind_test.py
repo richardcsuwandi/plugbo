@@ -80,11 +80,6 @@ def _lenz_create_args(
     kernel_llm_extra_body: str | None = None,
     constraints: list[dict] | None = None,
 ) -> list[str]:
-    if constraints and surrogate == "cake":
-        raise ValueError(
-            "this benchmark is constrained, and surrogate 'cake' only supports single-objective, "
-            "unconstrained studies -- pass --surrogate fixed instead"
-        )
     args = ["--acqf", acqf, "--surrogate", surrogate]
     if seed is not None:
         args += ["--seed", str(seed)]

@@ -26,13 +26,9 @@ class SurrogateError(ValueError):
 
 
 def _check_surrogate_compat(surrogate: str, is_moo: bool, has_constraints: bool) -> None:
+    del is_moo, has_constraints
     if surrogate not in SURROGATES:
         raise SurrogateError(f"unknown surrogate '{surrogate}' (expected 'fixed' or 'cake')")
-    if surrogate == "cake" and (is_moo or has_constraints):
-        raise SurrogateError(
-            "surrogate 'cake' only supports single-objective, unconstrained studies; "
-            "switch to 'fixed' first or drop the constraints/extra objectives"
-        )
 
 
 class NoMatchingSubmission(StateError):
@@ -238,20 +234,29 @@ def cmd_evolve_kernels(frame: Frame, args) -> tuple[Frame, dict]:
 def cmd_kernel_population(frame: Frame, args) -> tuple[None, dict]:
     if frame.shelf.surrogate != "cake":
         raise SurrogateError("kernel-population requires surrogate 'cake'")
+    targets = cake.cake_targets(frame)
     return None, {
-        "population": frame.shelf.kernel_population,
+        "targets": targets,
+        "populations": {t: frame.shelf.kernel_populations.get(t, []) for t in targets},
         "best": cake.get_best_kernel(frame),
-        **frame.shelf.kernel_evolution_state,
+        "evolution_states": frame.shelf.kernel_evolution_states,
     }
 
 
 def _surrogate_summary(frame: Frame) -> dict:
     out = {"surrogate": frame.shelf.surrogate}
     if frame.shelf.surrogate == "cake":
-        out["kernel_generation"] = frame.shelf.kernel_evolution_state.get("generation", 0)
-        out["kernel_frozen"] = frame.shelf.kernel_evolution_state.get("frozen", False)
-        out["kernel_population_size"] = len(frame.shelf.kernel_population)
-        out["best_kernel"] = cake.get_best_kernel(frame)
+        targets = cake.cake_targets(frame)
+        best = cake.get_best_kernel(frame)
+        out["kernel_targets"] = targets
+        out["best_kernels"] = best
+        out["kernel_population_size"] = sum(len(frame.shelf.kernel_populations.get(t, [])) for t in targets)
+        if frame.shelf.objectives:
+            primary = frame.shelf.objectives[0].metric
+            state = frame.shelf.kernel_evolution_states.get(primary, {})
+            out["kernel_generation"] = state.get("generation", 0)
+            out["kernel_frozen"] = state.get("frozen", False)
+            out["best_kernel"] = best.get(primary) if isinstance(best, dict) else best
     return out
 
 

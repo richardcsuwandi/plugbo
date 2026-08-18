@@ -240,7 +240,7 @@ Constraints can use `upper`, `lower`, or both. Pass an empty list to clear all c
 
 ### `set-surrogate`
 
-Switch between lenz's fixed Matérn kernel and an adaptive **CAKE** kernel population (single-objective, unconstrained studies only).
+Switch between lenz's fixed Matérn kernel and an adaptive **CAKE** kernel population. With `--surrogate cake`, lenz maintains a separate kernel population for each objective metric and each constraint metric. **BAKER** ranks weighted kernel combinations using the study's configured acquisition function (logEI, NEHVI/EHVI, constrained EI, or probability-of-feasibility). If populations are not ready, lenz falls back to the best kernel per metric.
 
 ```bash
 lenz set-surrogate --state ./state.json --surrogate cake \
@@ -390,7 +390,6 @@ Every in-flight config must eventually be observed — track which are still pen
 - `'not a subset of the original domain'`: bounds exceed the original space.
 - `'radius must be in (0, 1]'`: fix `--around --radius`.
 - `'multi-objective study cannot use ...'` / `'single-objective study cannot use ...'`: pick an acqf compatible with the current number of objectives.
-- `'surrogate 'cake' only supports single-objective, unconstrained studies'`: switch to `--surrogate fixed` first, or drop the constraints/extra objectives.
 - malformed JSON: quote JSON as a single shell argument.
 
 ## Command Selection Cheat Sheet
@@ -407,6 +406,6 @@ Every in-flight config must eventually be observed — track which are still pen
 - Need trial history: `trials`.
 - Need best current point: `incumbent`.
 - Need multi-objective front: `pareto`.
-- Need an adaptive kernel instead of the fixed default: `set-surrogate --surrogate cake` (single-objective, unconstrained only).
+- Need an adaptive kernel instead of the fixed default: `set-surrogate --surrogate cake`.
 - Need to force a kernel update after a regime change: `evolve-kernels --force`.
 - Need to see the current kernel population: `kernel-population`.

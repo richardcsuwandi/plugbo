@@ -3,7 +3,14 @@
 Implements the NeurIPS 2025 algorithm: population management, BIC fitness,
 LLM-guided crossover and mutation, and BAKER ranking. LLM calls go through
 `llm.factory`, and BAKER's acquisition half follows whatever acqf lenz has
-configured instead of hardcoded analytic EI.
+configured (logEI, NEHVI/EHVI, constrained EI, feasibility) instead of
+hardcoded analytic EI.
+
+Each objective metric and each constraint metric gets its own kernel population.
+BAKER ranks weighted kernel combinations: for each combo it fits the chosen
+kernels, optimizes the configured acquisition function, and scores
+prod(softmax(-BIC)) * acqf(x*). Combo count is capped; with one target this
+reduces to classic single-objective BAKER.
 
 lenz owns the outer BO loop; CAKE only ever answers two questions -- "should
 the population evolve now" and "given the population, which kernel/query
@@ -13,6 +20,8 @@ by CAKE picking or committing an evaluation itself.
 
 from __future__ import annotations
 
+import itertools
+import math
 import os
 import random
 import threading
@@ -25,16 +34,24 @@ from botorch.optim import optimize_acqf
 from llm.base import LLMClient, Message
 from llm.factory import get_client
 
-from .acquisition import KNOWN_ACQFS, AcqfError, build_single_objective_acqf
+from .acquisition import (
+    KNOWN_ACQFS,
+    AcqfError,
+    ProbabilityOfFeasibility,
+    build_moo_acqf,
+    build_single_objective_acqf,
+    has_feasible_incumbent,
+)
 from .kernels import DEFAULT_POPULATION, KernelParseError, parse_kernel_expression
 from .models import ModelSet, bic_score, fit_gp
 from .space import DTYPE, Encoder
-from .state import Frame
+from .state import Frame, Objective
 
 OPERATORS = ["+", "*"]
 NUM_RESTARTS = 8
 RAW_SAMPLES = 128
 MAX_KERNEL_EXPR_LENGTH = 10  # CAKE bloat-control check (paper: len(kernel) < 10)
+BAKER_MAX_COMBOS = 32  # cap on kernel tuples evaluated per suggest/score call
 
 # Kernel evolution is best-effort background maintenance triggered synchronously inside
 # `observe`/`submit` -- a slow or hung LLM call must not block the whole call indefinitely.
@@ -80,6 +97,169 @@ class CakeNotReadyError(RuntimeError):
 
 class LLMResponseParseError(ValueError):
     pass
+
+
+def cake_targets(frame: Frame) -> list[str]:
+    """Objective metrics plus constraint metrics, each with its own CAKE population."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for o in frame.shelf.objectives:
+        if o.metric not in seen:
+            seen.add(o.metric)
+            out.append(o.metric)
+    for c in frame.shelf.constraints:
+        if c.metric not in seen:
+            seen.add(c.metric)
+            out.append(c.metric)
+    return out
+
+
+def can_use_baker(frame: Frame) -> bool:
+    """True when CAKE surrogate is active and BAKER applies (not pure Sobol)."""
+    return frame.shelf.surrogate == "cake" and frame.shelf.acqf != "sobol"
+
+
+def _feasibility_phase(frame: Frame) -> bool:
+    return bool(frame.shelf.constraints) and not has_feasible_incumbent(frame)
+
+
+def _baker_targets(frame: Frame) -> list[str]:
+    """Metrics whose kernel populations BAKER enumerates for this suggest/score."""
+    if _feasibility_phase(frame):
+        return [c.metric for c in frame.shelf.constraints]
+    return cake_targets(frame)
+
+
+def _format_kernel_label(kernels: dict[str, str]) -> str:
+    if len(kernels) == 1:
+        return next(iter(kernels.values()))
+    return "|".join(f"{m}:{expr}" for m, expr in sorted(kernels.items()))
+
+
+def _model_set_for_kernels(
+    frame: Frame, encoder: Encoder, X: torch.Tensor, observed: list, kernels: dict[str, str]
+) -> ModelSet:
+    obj_models: dict[str, SingleTaskGP] = {}
+    con_models: dict[str, SingleTaskGP] = {}
+    signs: dict[str, float] = {}
+    y_raw: dict[str, torch.Tensor] = {}
+
+    for o in frame.shelf.objectives:
+        if o.metric not in kernels:
+            continue
+        y, yr, sign = _metric_tensors(frame, observed, o.metric)
+        obj_models[o.metric] = _fit_kernel_model(X, y, encoder, kernels[o.metric])
+        signs[o.metric] = sign
+        y_raw[o.metric] = yr
+
+    for c in frame.shelf.constraints:
+        if c.metric not in kernels:
+            continue
+        y, yr, _ = _metric_tensors(frame, observed, c.metric)
+        con_models[c.metric] = _fit_kernel_model(X, y, encoder, kernels[c.metric])
+        y_raw[c.metric] = yr
+
+    return ModelSet(
+        encoder=encoder,
+        X=X,
+        objective_models=obj_models,
+        constraint_models=con_models,
+        objective_sign=signs,
+        Y_raw=y_raw,
+    )
+
+
+def _prepared_populations(
+    frame: Frame, encoder: Encoder, X: torch.Tensor, observed: list, targets: list[str]
+) -> list[tuple[str, list[tuple[str, float]]]]:
+    """Returns [(metric, [(expression, softmax_weight), ...]), ...] sorted by BIC."""
+    out: list[tuple[str, list[tuple[str, float]]]] = []
+    for target in targets:
+        population = frame.shelf.kernel_populations.get(target) or []
+        if not population:
+            raise CakeNotReadyError
+        y, _, _ = _metric_tensors(frame, observed, target)
+        _refresh_fitness(population, encoder, X, y)
+        weights = _population_weights(population)
+        ranked = sorted(
+            zip(population, weights),
+            key=lambda pair: pair[0]["bic"] if pair[0]["bic"] is not None else float("inf"),
+        )
+        out.append((target, [(m["expression"], w) for m, w in ranked]))
+    return out
+
+
+def _kernel_combos(
+    prepared: list[tuple[str, list[tuple[str, float]]]], max_combos: int = BAKER_MAX_COMBOS
+) -> list[tuple[dict[str, str], float]]:
+    """Kernel tuples to evaluate. One target -> classic BAKER over its population."""
+    if not prepared:
+        raise CakeNotReadyError
+
+    n = len(prepared)
+    k = max(1, int(max_combos ** (1.0 / n)))
+    trimmed = [choices[: min(k, len(choices))] for _, choices in prepared]
+
+    combos: list[tuple[dict[str, str], float]] = []
+    for prod_item in itertools.product(*trimmed):
+        metrics = [m for m, _ in prepared]
+        kernels = {metrics[i]: prod_item[i][0] for i in range(n)}
+        weight = math.prod(prod_item[i][1] for i in range(n))
+        combos.append((kernels, weight))
+
+    if len(combos) > max_combos:
+        combos.sort(key=lambda c: c[1], reverse=True)
+        combos = combos[:max_combos]
+    return combos
+
+
+def _build_baker_acqf(
+    model_set: ModelSet,
+    frame: Frame,
+    acqf_name: str,
+    X_pending: torch.Tensor | None,
+):
+    if acqf_name == "probability_of_feasibility":
+        return ProbabilityOfFeasibility(model_set, frame), acqf_name
+    if frame.shelf.is_moo:
+        return build_moo_acqf(model_set, frame, acqf_name, X_pending), acqf_name
+    return build_single_objective_acqf(model_set, frame, acqf_name, frame.shelf.acqf_params, X_pending), acqf_name
+
+
+def _baker_acqf_name(frame: Frame) -> str:
+    if _feasibility_phase(frame):
+        return "probability_of_feasibility"
+    return frame.shelf.acqf
+
+
+def _population(frame: Frame, target: str) -> list[dict]:
+    return frame.shelf.kernel_populations.setdefault(target, [])
+
+
+def _evolution_state(frame: Frame, target: str) -> dict:
+    states = frame.shelf.kernel_evolution_states
+    if target not in states:
+        states[target] = {"generation": 0, "last_evolved_at_n_observed": 0, "frozen": False}
+    return states[target]
+
+
+def _objective_for_metric(frame: Frame, target: str) -> Objective | None:
+    for o in frame.shelf.objectives:
+        if o.metric == target:
+            return o
+    return None
+
+
+def _metric_tensors(
+    frame: Frame, observed: list, target: str
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """Returns (y_for_gp_fit, y_raw, sign). Objectives are sign-adjusted to maximize."""
+    obj = _objective_for_metric(frame, target)
+    y_raw = torch.tensor([[float(t.metrics[target])] for t in observed], dtype=DTYPE)
+    if obj is None:
+        return y_raw, y_raw, 1.0
+    sign = -1.0 if obj.minimize else 1.0
+    return y_raw * sign, y_raw, sign
 
 
 # -- prompts (response format: "Kernel: ... / Analysis: ...") ----------------
@@ -142,11 +322,13 @@ def _fit_kernel_model(X: torch.Tensor, y: torch.Tensor, encoder: Encoder, expres
     return fit_gp(X, y, encoder.domain_bounds, covar_module=kernel)
 
 
-def _refresh_fitness(frame: Frame, encoder: Encoder, X: torch.Tensor, y: torch.Tensor) -> None:
+def _refresh_fitness(
+    population: list[dict], encoder: Encoder, X: torch.Tensor, y: torch.Tensor
+) -> None:
     """Refits every population member against the current data and updates
     its BIC in place. `y` is already sign-adjusted to the maximize convention.
     """
-    for member in frame.shelf.kernel_population:
+    for member in population:
         try:
             model = _fit_kernel_model(X, y, encoder, member["expression"])
             member["bic"] = bic_score(model, X, y)
@@ -174,9 +356,15 @@ def _upsert_member(population: list[dict], expression: str, bic: float, generati
 
 
 def _crossover_step(
-    frame: Frame, encoder: Encoder, client: LLMClient, X: torch.Tensor, y: torch.Tensor, sys_prompt: str, generation: int
+    population: list[dict],
+    frame: Frame,
+    encoder: Encoder,
+    client: LLMClient,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    sys_prompt: str,
+    generation: int,
 ) -> None:
-    population = frame.shelf.kernel_population
     for _ in range(frame.shelf.kernel_num_crossover):
         if len(population) < 2:
             return
@@ -219,9 +407,15 @@ def _crossover_step(
 
 
 def _mutation_step(
-    frame: Frame, encoder: Encoder, client: LLMClient, X: torch.Tensor, y: torch.Tensor, sys_prompt: str, generation: int
+    population: list[dict],
+    frame: Frame,
+    encoder: Encoder,
+    client: LLMClient,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    sys_prompt: str,
+    generation: int,
 ) -> None:
-    population = frame.shelf.kernel_population
     if not population or random.random() >= frame.shelf.kernel_mutation_prob:
         return
     fittest = min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
@@ -249,64 +443,81 @@ def _mutation_step(
     _upsert_member(population, expression, bic, generation)
 
 
-def _select_survivors(frame: Frame) -> None:
-    population = frame.shelf.kernel_population
+def _select_survivors(population: list[dict], frame: Frame) -> None:
     population.sort(key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
     del population[frame.shelf.kernel_population_size :]
 
 
-def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient) -> None:
-    """One generation: fitness -> crossover -> mutation -> survivor selection.
+def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target: str) -> None:
+    """One generation for `target`: fitness -> crossover -> mutation -> survivor selection.
     Lazily seeds the population with the six base kernels on first call
     (CAKE's own `run()` treats "initialize" and "evolve" as the same step).
     """
     observed = frame.observed_trials()
-    obj = frame.shelf.objectives[0]
     X = torch.stack([encoder.encode(t.config) for t in observed])
-    sign = -1.0 if obj.minimize else 1.0
-    y = torch.tensor([[float(t.metrics[obj.metric])] for t in observed], dtype=DTYPE) * sign
+    y, _, _ = _metric_tensors(frame, observed, target)
+    population = _population(frame, target)
+    state = _evolution_state(frame, target)
 
-    if not frame.shelf.kernel_population:
-        frame.shelf.kernel_population = [
+    if not population:
+        frame.shelf.kernel_populations[target] = [
             {"expression": name, "bic": None, "generation": 0} for name in DEFAULT_POPULATION
         ]
+        population = _population(frame, target)
 
-    generation = frame.shelf.kernel_evolution_state.get("generation", 0) + 1
+    generation = state.get("generation", 0) + 1
     sys_prompt = _system_prompt(X, y)
 
-    _refresh_fitness(frame, encoder, X, y)
-    _crossover_step(frame, encoder, client, X, y, sys_prompt, generation)
-    _mutation_step(frame, encoder, client, X, y, sys_prompt, generation)
-    _refresh_fitness(frame, encoder, X, y)
-    _select_survivors(frame)
+    _refresh_fitness(population, encoder, X, y)
+    _crossover_step(population, frame, encoder, client, X, y, sys_prompt, generation)
+    _mutation_step(population, frame, encoder, client, X, y, sys_prompt, generation)
+    _refresh_fitness(population, encoder, X, y)
+    _select_survivors(population, frame)
 
-    frame.shelf.kernel_evolution_state["generation"] = generation
-    frame.shelf.kernel_evolution_state["last_evolved_at_n_observed"] = len(observed)
+    state["generation"] = generation
+    state["last_evolved_at_n_observed"] = len(observed)
     frame.log_event(
         "evolve-kernels",
+        target=target,
         generation=generation,
-        population=[m["expression"] for m in frame.shelf.kernel_population],
-        best=get_best_kernel(frame),
+        population=[m["expression"] for m in population],
+        best=get_best_kernel(frame, target),
     )
 
 
-def get_best_kernel(frame: Frame) -> str | None:
-    population = frame.shelf.kernel_population
+def get_best_kernel(frame: Frame, target: str | None = None) -> str | None | dict[str, str | None]:
+    if target is None:
+        return {t: get_best_kernel(frame, t) for t in cake_targets(frame)}
+    population = frame.shelf.kernel_populations.get(target) or []
     if not population:
         return None
     return min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))["expression"]
 
 
+def covar_module_for_metric(frame: Frame, d: int, metric: str):
+    """Best-BIC kernel expression for `metric`, or None if unavailable."""
+    if frame.shelf.surrogate != "cake":
+        return None
+    population = frame.shelf.kernel_populations.get(metric) or []
+    if not population:
+        return None
+    best = min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
+    try:
+        return parse_kernel_expression(best["expression"], d)
+    except KernelParseError:
+        return None
+
+
 # -- scheduling ---------------------------------------------------------
 
 
-def should_evolve(frame: Frame) -> bool:
+def should_evolve(frame: Frame, target: str) -> bool:
     """Mechanical, decoupled from Sara's reasoning cadence: lenz checks this
     itself at the end of every successful `observe`/`submit --metrics`.
     """
     if frame.shelf.surrogate != "cake":
         return False
-    state = frame.shelf.kernel_evolution_state
+    state = _evolution_state(frame, target)
     if state.get("frozen"):
         return False
 
@@ -316,7 +527,8 @@ def should_evolve(frame: Frame) -> bool:
         state["frozen"] = True  # freeze from here on; population is kept, just no more LLM calls
         return False
 
-    if not frame.shelf.kernel_population:
+    population = frame.shelf.kernel_populations.get(target) or []
+    if not population:
         return n_observed >= frame.shelf.kernel_init_after
 
     last = state.get("last_evolved_at_n_observed", 0)
@@ -325,12 +537,9 @@ def should_evolve(frame: Frame) -> bool:
 
 def maybe_evolve(frame: Frame, encoder: Encoder, force: bool = False) -> bool:
     """Checks (unless `force`) whether evolution is due and, if so, runs one
-    generation. Best-effort: LLM/parsing failures are logged, never raised --
-    a transient hiccup here must not fail the `observe`/`evolve-kernels` call
-    that triggered it. Returns whether a generation actually ran.
+    generation per target metric. Best-effort: LLM/parsing failures are logged,
+    never raised. Returns whether any generation actually ran.
     """
-    if not force and not should_evolve(frame):
-        return False
     if frame.shelf.surrogate != "cake":
         return False
     if len(frame.observed_trials()) < 2:
@@ -352,11 +561,20 @@ def maybe_evolve(frame: Frame, encoder: Encoder, force: bool = False) -> bool:
             timeout=KERNEL_LLM_TIMEOUT_SECONDS,
             extra_body=llm_cfg.get("extra_body"),
         )
-        evolve_generation(frame, encoder, client)
-        return True
     except Exception as e:
         frame.log_event("evolve-kernels", status="failed", error=str(e))
         return False
+
+    ran_any = False
+    for target in cake_targets(frame):
+        if not force and not should_evolve(frame, target):
+            continue
+        try:
+            evolve_generation(frame, encoder, client, target)
+            ran_any = True
+        except Exception as e:
+            frame.log_event("evolve-kernels", status="failed", target=target, error=str(e))
+    return ran_any
 
 
 # -- BAKER: weighted kernel x acquisition ranking ---------------------------
@@ -369,38 +587,24 @@ def _eval_acqf(acqf, x: torch.Tensor) -> float:
 
 
 def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tensor | None) -> list[dict]:
-    """`weight_k = softmax(-BIC_k)`, `score_k = weight_k * acqf_k(x*_k)` under
-    lenz's currently configured acqf; returns the top-`q` kernel/query pairs.
+    """Rank kernel combinations by prod(softmax(-BIC)) * acqf(x*), then return
+    the top-`q` (kernel combo, query) pairs. Uses NEHVI/EHVI for MOO, constrained
+    logEI when constraints are present, and probability-of-feasibility before any
+    feasible incumbent exists. One target reduces to classic single-objective BAKER.
     """
-    if not frame.shelf.kernel_population:
-        raise CakeNotReadyError
-
     observed = frame.observed_trials()
-    obj = frame.shelf.objectives[0]
     X = torch.stack([encoder.encode(t.config) for t in observed])
-    sign = -1.0 if obj.minimize else 1.0
-    y_raw = torch.tensor([[float(t.metrics[obj.metric])] for t in observed], dtype=DTYPE)
-    y = y_raw * sign
-
-    _refresh_fitness(frame, encoder, X, y)
-    population = frame.shelf.kernel_population
-    weights = _population_weights(population)
     bounds = encoder.encode_bounds(frame.shelf.bounds)
-    acqf_name = frame.shelf.acqf
+    targets = _baker_targets(frame)
+    prepared = _prepared_populations(frame, encoder, X, observed, targets)
+    combos = _kernel_combos(prepared)
+    acqf_name = _baker_acqf_name(frame)
 
     candidates = []
-    for member, weight in zip(population, weights):
+    for kernels, weight in combos:
         try:
-            model = _fit_kernel_model(X, y, encoder, member["expression"])
-            model_set = ModelSet(
-                encoder=encoder,
-                X=X,
-                objective_models={obj.metric: model},
-                constraint_models={},
-                objective_sign={obj.metric: sign},
-                Y_raw={obj.metric: y_raw},
-            )
-            acqf = build_single_objective_acqf(model_set, frame, acqf_name, frame.shelf.acqf_params, X_pending)
+            model_set = _model_set_for_kernels(frame, encoder, X, observed, kernels)
+            acqf, _ = _build_baker_acqf(model_set, frame, acqf_name, X_pending)
             x_star, _ = optimize_acqf(
                 acq_function=acqf, bounds=bounds, q=1, num_restarts=NUM_RESTARTS, raw_samples=RAW_SAMPLES
             )
@@ -408,7 +612,12 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
         except Exception:
             continue
         candidates.append(
-            {"expression": member["expression"], "x": x_star.squeeze(0), "acq_val": acq_val, "score": weight * acq_val}
+            {
+                "kernels": kernels,
+                "x": x_star.squeeze(0),
+                "acq_val": acq_val,
+                "score": weight * acq_val,
+            }
         )
 
     if not candidates:
@@ -417,41 +626,34 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
     candidates.sort(key=lambda c: c["score"], reverse=True)
     out = []
     for c in candidates[:q]:
+        label = _format_kernel_label(c["kernels"])
         out.append(
             {
                 "config": encoder.decode(c["x"]),
                 "acquisition_values": {acqf_name: c["acq_val"], "baker_score": c["score"]},
                 "trial_id": None,
                 "acqf": acqf_name,
-                "kernel": c["expression"],
+                "kernel": label,
+                "kernels": c["kernels"],
             }
         )
     return out
 
 
 def baker_score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[str]) -> list[dict]:
-    """Weighted-ensemble version of `score`: for each acqf, sums each
-    population member's acquisition value at the given candidates, weighted
-    by `softmax(-BIC)` -- keeps `score` apples-to-apples with `baker_suggest`.
+    """Weighted-ensemble BAKER score at fixed configs: for each acqf, sum over
+    kernel combos of prod(softmax(-BIC)) * acqf(combo, x).
     """
-    if not frame.shelf.kernel_population:
-        raise CakeNotReadyError
-
     observed = frame.observed_trials()
-    obj = frame.shelf.objectives[0]
     X = torch.stack([encoder.encode(t.config) for t in observed])
-    sign = -1.0 if obj.minimize else 1.0
-    y_raw = torch.tensor([[float(t.metrics[obj.metric])] for t in observed], dtype=DTYPE)
-    y = y_raw * sign
-
-    _refresh_fitness(frame, encoder, X, y)
-    population = frame.shelf.kernel_population
-    weights = _population_weights(population)
+    targets = _baker_targets(frame)
+    prepared = _prepared_populations(frame, encoder, X, observed, targets)
+    combos = _kernel_combos(prepared)
     Xc = torch.stack([encoder.encode(c) for c in configs])
 
     results: list[dict] = [dict() for _ in configs]
     for name in acqf_names:
-        if name not in KNOWN_ACQFS:
+        if name not in KNOWN_ACQFS and name != "probability_of_feasibility":
             raise AcqfError(f"unknown acqf '{name}'")
         if name == "sobol":
             for r in results:
@@ -460,18 +662,10 @@ def baker_score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names:
 
         totals = [0.0] * len(configs)
         any_ok = False
-        for member, weight in zip(population, weights):
+        for kernels, weight in combos:
             try:
-                model = _fit_kernel_model(X, y, encoder, member["expression"])
-                model_set = ModelSet(
-                    encoder=encoder,
-                    X=X,
-                    objective_models={obj.metric: model},
-                    constraint_models={},
-                    objective_sign={obj.metric: sign},
-                    Y_raw={obj.metric: y_raw},
-                )
-                acqf = build_single_objective_acqf(model_set, frame, name, frame.shelf.acqf_params, None)
+                model_set = _model_set_for_kernels(frame, encoder, X, observed, kernels)
+                acqf, _ = _build_baker_acqf(model_set, frame, name, None)
             except Exception:
                 continue
             any_ok = True
