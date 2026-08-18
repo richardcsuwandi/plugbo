@@ -1,13 +1,12 @@
 # agentic-bo
 
-Implements **agentic Bayesian optimization** from ["Agentic Bayesian
-Optimization through Surrogate-Augmented Autoresearch"](https://arxiv.org/abs/2608.00316)
-(Brunzema, Tiao, Le, De Angeli, Xuan, Gligorijevic, Meta, 2026), with
-**CAKE** (Context-Aware Kernel Evolution) integrated as a first-class surrogate
-module, from
-["Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
-LLMs"](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
-(Suwandi, Yin, Wang, Li, Chang, Theodoridis, NeurIPS 2025).
+Implementation of **agentic Bayesian optimization** from [Agentic Bayesian
+Optimization through Surrogate-Augmented Autoresearch](https://arxiv.org/abs/2608.00316)
+(2026), with **CAKE** (Context-Aware Kernel Evolution) integrated as a
+first-class surrogate module from [Adaptive Kernel Design for Bayesian
+Optimization Is a Piece of CAKE with
+LLMs](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
+(NeurIPS 2025).
 
 Standard BO fixes its policy (surrogate, acquisition, bounds, objectives) before
 the first evaluation and never changes it. Agentic BO puts an LLM agent in charge
@@ -21,11 +20,10 @@ Three pieces:
   `state.json`, runs one operation, saves, and prints one JSON line.
   Reconfiguring the problem never discards prior trials. Default surrogate is
   fixed Matérn (`--surrogate fixed`).
-- **`CAKE`**: adaptive GP kernel evolution ([NeurIPS
-  2025](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)).
-  A population of composite kernels maintained on a schedule inside `lenz`, with
-  **separate** `--kernel-llm-*` calls (no shared conversation with Sara).
-  Enabled via `--surrogate cake`. Code: `lenz/cake.py`.
+- **`CAKE`**: adaptive GP kernel evolution with LLMs. A population of
+  composite kernels maintained on a schedule inside `lenz`, with **separate**
+  `--kernel-llm-*` calls (no shared conversation with Sara). Enabled via
+  `--surrogate cake`. Code: `lenz/cake.py`.
 - **`sara`**: LLM agent that drives `lenz` with `bash` and `read` only,
   sandboxed to a working directory, using system prompts from the Meta paper
   appendix. Sara frames the problem, calls `lenz create`, and loops
@@ -33,7 +31,7 @@ Three pieces:
 
 This is an **independent from-scratch reimplementation** of the agentic BO stack.
 The Meta paper has no released reference code. This repo is **not** an official
-Meta implementation. CAKE is integrated per the NeurIPS paper above.
+Meta implementation. CAKE follows the NeurIPS algorithm (see References).
 
 ## Install
 
@@ -66,10 +64,6 @@ CAKE evolves a GP kernel population during BO. LLMs act as crossover and
 mutation operators. **BAKER** (BIC-Acquisition Kernel Ranking) picks which
 kernel to acquire with, balancing BIC fit against the configured acquisition
 function.
-
-Paper: [Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
-LLMs](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
-(NeurIPS 2025).
 
 CAKE is **not** part of Sara's agent loop. It runs inside `lenz` on its own
 schedule during `observe`/`submit`, using `--kernel-llm-*` settings independent
@@ -164,9 +158,6 @@ Add `--shift` for revealed identity with a relocated optimum. **Vanilla baseline
 Pin backend for the whole run with `--surrogate {fixed,cake}` and `--acqf`.
 CAKE also needs `--kernel-llm-provider` and `--kernel-llm-model`.
 
-What each probe measures and how to read curves is in
-[`docs/observations.md`](docs/observations.md).
-
 ## Compare scripts
 
 Three shell scripts overlay regret curves across condition subdirectories. Default
@@ -225,7 +216,6 @@ Runs write `run_meta.json` (provider, model, budget, timestamps) beside
 | New vanilla baseline policy | `benchmarks/run_blind_baseline.py` (`POLICIES`) |
 | New lenz capability (acquisition, surrogate) | `lenz/acquisition.py`, `lenz/cake.py`, `lenz/models.py` |
 | New compare condition | Add a block in a `scripts/run_*_compare.sh` |
-| Regime-2 (prior-informed) benchmark | See `docs/observations.md` |
 
 `benchmarks/plot_compare.py` auto-discovers scored subdirectories. No code
 change needed to add a new condition folder.
@@ -238,11 +228,14 @@ pytest
 pytest -m "not slow"
 ```
 
-## Limitations
+## References
 
-- Bounded reals, integers, and categoricals only (paper scope).
-- CAKE: single-objective, unconstrained only.
-- Kernel evolution runs synchronously inside scheduled `submit`/`observe` calls
-  (up to two LLM calls, 90s timeout each in `lenz/cake.py`).
-- Constrained BO feasibility phase uses independent constraint probabilities.
-- No fine-tuning of the agent. General-purpose LLM plus system prompt only.
+1. Brunzema, T., Tiao, J., Le, T., De Angeli, G., Xuan, Y., Gligorijevic, V.
+   *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch.*
+   Meta, 2026.
+   [arXiv:2608.00316](https://arxiv.org/abs/2608.00316)
+
+2. Suwandi, R., Yin, J., Wang, Y., Li, Y., Chang, Y., Theodoridis, S.
+   *Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
+   LLMs.* NeurIPS 2025.
+   [PDF](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
