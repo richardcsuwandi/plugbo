@@ -8,11 +8,11 @@ Optimization Is a Piece of CAKE with
 LLMs](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
 (NeurIPS 2025).
 
-Standard BO fixes its policy (surrogate, acquisition, bounds, objectives) before
-the first evaluation and never changes it. Agentic BO puts an LLM agent in charge
-of that policy while a BoTorch backend still fits the surrogate and optimizes
-acquisition. CAKE addresses a different bottleneck: which GP kernel to use as
-data arrives, via LLM-guided crossover and mutation plus BAKER ranking.
+Standard BO fixes its policy before the first evaluation and never changes it.
+Agentic BO puts an LLM agent in charge of surrogate, acquisition, bounds, and
+objectives while a BoTorch backend still fits models and optimizes acquisition.
+CAKE targets a separate bottleneck: which GP kernel to use as data arrives,
+via LLM-guided crossover and mutation plus BAKER ranking.
 
 Three pieces:
 
@@ -31,7 +31,8 @@ Three pieces:
 
 This is an **independent from-scratch reimplementation** of the agentic BO stack.
 The Meta paper has no released reference code. This repo is **not** an official
-Meta implementation.
+Meta implementation. See [References](#references) for citations.
+
 ## Install
 
 ```bash
@@ -159,8 +160,9 @@ CAKE also needs `--kernel-llm-provider` and `--kernel-llm-model`.
 
 ## Compare scripts
 
-Three shell scripts overlay regret curves across condition folders. Defaults:
-budget `100`, seed `42`. Provider and model from `scripts/_compare_env.sh`.
+Three shell scripts overlay regret curves across condition folders under
+`results/logs/`. Defaults: budget `100`, seed `42`. Provider and model from
+`scripts/_compare_env.sh`.
 
 | Script | What varies | Output dir |
 |---|---|---|
@@ -182,9 +184,9 @@ Used by `run_noblind_compare.sh` and the Python runners (`--shift`, revealed
 | **Revealed + shifted** | Real name and bounds | Same shift as blind | Does recalled structure help search? |
 | **Revealed, unshifted** | Real name and bounds | Textbook location | One-shot recall probe |
 
-For an unshifted revealed probe, run `run_noblind_test` with default `--budget 5`
-and check `one_shot_success` at eval 1. Compare scripts keep budget 100 so all
-three conditions share the same x-axis on regret plots.
+Unshifted revealed runs are one-shot recall probes: use `run_noblind_test` with
+default `--budget 5` and read `one_shot_success` at eval 1. Compare scripts use
+budget 100 so blind, shifted, and unshifted curves share the same x-axis.
 
 ```bash
 ./scripts/run_benchmark_compare.sh hartmann6
