@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import cake
+from ..llm_config import add_llm_flags, resolved_plugin_llm, spec_complete
 from ..space import Encoder
 from ..state import Frame, Trial
 from .base import SLOT_SURROGATE, LenzPlugin, PluginError
@@ -23,19 +24,7 @@ class CakePlugin(LenzPlugin):
         sub.add_parser("kernel-population", parents=[state_parent])
 
     def add_create_args(self, parser) -> None:
-        parser.add_argument("--kernel-llm-provider", default=None)
-        parser.add_argument("--kernel-llm-model", default=None)
-        parser.add_argument("--kernel-llm-base-url", default=None)
-        parser.add_argument(
-            "--kernel-llm-api-key-env",
-            default=None,
-            help="env var NAME holding the key -- never the key itself",
-        )
-        parser.add_argument(
-            "--kernel-llm-extra-body",
-            default=None,
-            help="JSON object merged into the kernel LLM's request body",
-        )
+        add_llm_flags(parser, flag_prefix="--kernel-llm", dest_prefix="kernel_llm", help_suffix="optional CAKE override; default is Sara / --llm-*")
         parser.add_argument("--kernel-population-size", type=int, default=None)
         parser.add_argument("--kernel-init-after", type=int, default=None)
         parser.add_argument("--kernel-evolve-every", type=int, default=None)
@@ -59,10 +48,16 @@ class CakePlugin(LenzPlugin):
         blob = cake.state(frame)
         targets = cake.cake_targets(frame)
         best = cake.get_best_kernel(frame)
+        override = blob.get("kernel_llm") or {}
+        resolved = resolved_plugin_llm(frame, override)
         out = {
             "kernel_targets": targets,
             "best_kernels": best,
             "kernel_population_size": sum(len(blob["kernel_populations"].get(t, [])) for t in targets),
+            "kernel_llm": {k: v for k, v in resolved.items() if k != "api_key"} if spec_complete(resolved) else {},
+            "kernel_llm_source": (
+                "override" if spec_complete(override) else ("default" if spec_complete(frame.default_llm) else "unset")
+            ),
         }
         if frame.shelf.objectives:
             primary = frame.shelf.objectives[0].metric

@@ -155,8 +155,13 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=None, help="pins the renaming/shift transform AND the Sobol warm-start")
     p.add_argument("--warmup", type=int, default=None, help="shared Sobol evaluations before the policy loop (default: d+1 when --seed is set, else 0)")
     p.add_argument("--policy", default="vanilla", choices=sorted(POLICIES), help="see POLICIES in this file")
-    p.add_argument("--kernel-llm-provider", default=None, help="required if the policy's surrogate is cake")
-    p.add_argument("--kernel-llm-model", default=None, help="required if the policy's surrogate is cake")
+    p.add_argument("--llm-provider", default=None, help="default plugin LLM for CAKE (no Sara in this script)")
+    p.add_argument("--llm-model", default=None)
+    p.add_argument("--llm-base-url", default=None)
+    p.add_argument("--llm-api-key-env", default=None)
+    p.add_argument("--llm-extra-body", default=None)
+    p.add_argument("--kernel-llm-provider", default=None, help="CAKE override; else uses --llm-*")
+    p.add_argument("--kernel-llm-model", default=None, help="CAKE override; else uses --llm-*")
     p.add_argument("--kernel-llm-base-url", default=None, help="required if --kernel-llm-provider is openai-compatible")
     p.add_argument("--kernel-llm-api-key-env", default=None, help="name of the env var holding the kernel LLM's key -- never the key itself")
     p.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body")
@@ -178,6 +183,16 @@ def main() -> None:
     args = p.parse_args()
 
     extra_create_args = list(args.extra_create_args or [])
+    if args.llm_provider:
+        extra_create_args += ["--llm-provider", args.llm_provider]
+    if args.llm_model:
+        extra_create_args += ["--llm-model", args.llm_model]
+    if args.llm_base_url:
+        extra_create_args += ["--llm-base-url", args.llm_base_url]
+    if args.llm_api_key_env:
+        extra_create_args += ["--llm-api-key-env", args.llm_api_key_env]
+    if args.llm_extra_body:
+        extra_create_args += ["--llm-extra-body", args.llm_extra_body]
     if args.kernel_llm_provider:
         extra_create_args += ["--kernel-llm-provider", args.kernel_llm_provider]
     if args.kernel_llm_model:

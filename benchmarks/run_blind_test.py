@@ -14,6 +14,7 @@ from pathlib import Path
 from sara.agent import run_campaign
 from sara.cli import _now_iso, _system_prompt, _system_prompt_sara_only, _user_prompt, _user_prompt_sara_only, _write_meta
 from llm.factory import get_client
+from lenz.llm_config import export_api_key, stamp_workdir
 
 from .functions import true_regret
 from .lenz_loop import create_and_warmup, warmup_n
@@ -75,6 +76,11 @@ def _lenz_create_args(
     acqf: str,
     budget: int,
     seed: int | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    llm_base_url: str | None = None,
+    llm_api_key_env: str | None = None,
+    llm_extra_body: str | None = None,
     kernel_llm_provider: str | None = None,
     kernel_llm_model: str | None = None,
     kernel_llm_base_url: str | None = None,
@@ -87,9 +93,15 @@ def _lenz_create_args(
         args += ["--seed", str(seed)]
     if constraints:
         args += ["--constraints", json.dumps(constraints)]
-    if surrogate == "cake":
-        if not (kernel_llm_provider and kernel_llm_model):
-            raise ValueError("--surrogate cake requires --kernel-llm-provider and --kernel-llm-model")
+    if llm_provider and llm_model:
+        args += ["--llm-provider", llm_provider, "--llm-model", llm_model]
+        if llm_base_url:
+            args += ["--llm-base-url", llm_base_url]
+        if llm_api_key_env:
+            args += ["--llm-api-key-env", llm_api_key_env]
+        if llm_extra_body:
+            args += ["--llm-extra-body", llm_extra_body]
+    if kernel_llm_provider and kernel_llm_model:
         args += ["--kernel-llm-provider", kernel_llm_provider, "--kernel-llm-model", kernel_llm_model]
         if kernel_llm_base_url:
             args += ["--kernel-llm-base-url", kernel_llm_base_url]
@@ -147,6 +159,7 @@ def run_blind_test(
 ) -> dict:
     built = build_sandbox(benchmark_name, root=root, seed=seed)
     sandbox: Path = built["sandbox"]
+    export_api_key(provider, api_key)
 
     secret = json.loads(built["secret_path"].read_text())
     ob = ObfuscatedBenchmark.from_secret(secret)
@@ -196,6 +209,11 @@ def run_blind_test(
             acqf,
             budget,
             seed=seed,
+            llm_provider=provider,
+            llm_model=model,
+            llm_base_url=base_url,
+            llm_extra_body=extra_body,
+            llm_api_key_env=None if (kernel_llm_provider and kernel_llm_model) else kernel_llm_api_key_env,
             kernel_llm_provider=kernel_llm_provider,
             kernel_llm_model=kernel_llm_model,
             kernel_llm_base_url=kernel_llm_base_url,
@@ -206,6 +224,27 @@ def run_blind_test(
         n_warm = warmup_n(len(ob.param_names), seed, warmup)
         already = create_and_warmup(
             sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
+        )
+        cake_override = {}
+        if kernel_llm_provider and kernel_llm_model:
+            cake_override = {
+                "cake": {
+                    "provider": kernel_llm_provider,
+                    "model": kernel_llm_model,
+                    "base_url": kernel_llm_base_url,
+                    "api_key_env": kernel_llm_api_key_env,
+                    "extra_body": kernel_llm_extra_body,
+                }
+            }
+        stamp_workdir(
+            sandbox,
+            {
+                "provider": provider,
+                "model": model,
+                "base_url": base_url,
+                "extra_body": extra_body,
+            },
+            cake_override,
         )
         user_prompt = _user_prompt((sandbox / "context.md").read_text(), "./oracle", budget)
         user_prompt += _backend_directive(already, budget, create_args)
@@ -286,8 +325,8 @@ def main() -> None:
     p.add_argument("--warmup", type=int, default=None, help="shared Sobol evaluations before sara starts (default: d+1 when --seed is set, else 0)")
     p.add_argument("--surrogate", default="fixed", choices=["fixed", "cake"], help="pinned for the whole run; sara is instructed not to change it")
     p.add_argument("--acqf", default="noisy_logei", help="pinned for the whole run; sara is instructed not to change it")
-    p.add_argument("--kernel-llm-provider", default=None, help="required if --surrogate cake")
-    p.add_argument("--kernel-llm-model", default=None, help="required if --surrogate cake")
+    p.add_argument("--kernel-llm-provider", default=None, help="CAKE override; defaults to --provider/--model")
+    p.add_argument("--kernel-llm-model", default=None, help="CAKE override; defaults to --provider/--model")
     p.add_argument("--kernel-llm-base-url", default=None, help="required if --kernel-llm-provider is openai-compatible")
     p.add_argument("--kernel-llm-api-key-env", default=None, help="name of the env var holding the kernel LLM's key -- never the key itself")
     p.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body, e.g. '{\"enable_thinking\": false}'")

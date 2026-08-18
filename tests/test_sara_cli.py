@@ -49,6 +49,9 @@ def test_cmd_run_writes_completed_meta(tmp_path, monkeypatch):
     assert meta["ended_at"] is not None
     assert meta["n_steps"] == 1
     assert meta["final_message"] == "done"
+    sidecar = json.loads((workdir / "agent_llm.json").read_text())
+    assert sidecar["provider"] == "anthropic"
+    assert sidecar["model"] == "claude-x"
 
 
 def test_cmd_run_writes_failed_meta_on_exception(tmp_path, monkeypatch):

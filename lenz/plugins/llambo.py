@@ -7,12 +7,11 @@ also call ``lenz llambo sample`` / ``warmstart`` and then ``lenz score``.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from llm.base import Message
-from llm.factory import get_client
 
+from ..llm_config import add_llm_flags, client_from_spec, resolved_plugin_llm, spec_complete, spec_from_args
 from ..space import Encoder
 from ..state import Frame
 from .base import SLOT_SAMPLER, LenzPlugin, PluginError
@@ -41,30 +40,26 @@ class LlamboPlugin(LenzPlugin):
         sm.add_argument("--n", type=int, default=8)
         sm.add_argument("--context", default=None)
         cfg = inner.add_parser("set-llm")
-        cfg.add_argument("--provider", required=True)
-        cfg.add_argument("--model", required=True)
-        cfg.add_argument("--base-url", default=None)
-        cfg.add_argument("--api-key-env", default=None)
+        cfg.add_argument("--provider", dest="llambo_llm_provider", required=True)
+        cfg.add_argument("--model", dest="llambo_llm_model", required=True)
+        cfg.add_argument("--base-url", dest="llambo_llm_base_url", default=None)
+        cfg.add_argument("--api-key-env", dest="llambo_llm_api_key_env", default=None)
+        cfg.add_argument("--extra-body", dest="llambo_llm_extra_body", default=None)
         inner.add_parser("status")
 
     def add_create_args(self, parser) -> None:
-        parser.add_argument("--sampler-llm-provider", default=None)
-        parser.add_argument("--sampler-llm-model", default=None)
-        parser.add_argument("--sampler-llm-base-url", default=None)
-        parser.add_argument("--sampler-llm-api-key-env", default=None)
+        add_llm_flags(
+            parser,
+            flag_prefix="--sampler-llm",
+            dest_prefix="sampler_llm",
+            help_suffix="optional LLAMBO override; default is Sara / --llm-*",
+        )
 
     def apply_create_args(self, frame: Frame, args) -> None:
-        provider = getattr(args, "sampler_llm_provider", None)
-        model = getattr(args, "sampler_llm_model", None)
-        if not provider or not model:
+        spec = spec_from_args(args, "sampler_llm")
+        if not spec_complete(spec):
             return
-        blob = self.blob(frame)
-        blob["llm"] = {
-            "provider": provider,
-            "model": model,
-            "base_url": getattr(args, "sampler_llm_base_url", None),
-            "api_key_env": getattr(args, "sampler_llm_api_key_env", None),
-        }
+        self.blob(frame)["llm"] = spec
 
     def commands(self):
         return {"llambo": self._dispatch}
@@ -76,9 +71,11 @@ class LlamboPlugin(LenzPlugin):
 
     def summary(self, frame: Frame) -> dict:
         blob = self.blob(frame)
-        llm = blob.get("llm") or {}
+        override = blob.get("llm") or {}
+        resolved = resolved_plugin_llm(frame, override)
         return {
-            "llm": {k: v for k, v in llm.items() if k != "api_key"},
+            "llm": {k: v for k, v in resolved.items() if k != "api_key"} if spec_complete(resolved) else {},
+            "llm_source": "override" if spec_complete(override) else ("default" if spec_complete(frame.default_llm) else "unset"),
             "n_last_candidates": len(blob.get("last_candidates") or []),
             "has_context": bool(blob.get("context")),
         }
@@ -91,13 +88,10 @@ class LlamboPlugin(LenzPlugin):
         encoder = Encoder(frame.space)
         cmd = args.llambo_cmd
         if cmd == "set-llm":
-            blob = self.blob(frame)
-            blob["llm"] = {
-                "provider": args.provider,
-                "model": args.model,
-                "base_url": args.base_url,
-                "api_key_env": args.api_key_env,
-            }
+            spec = spec_from_args(args, "llambo_llm")
+            if not spec_complete(spec):
+                raise PluginError("llambo set-llm requires --provider and --model")
+            self.blob(frame)["llm"] = spec
             frame.log_event("llambo", action="set-llm")
             return frame, self.summary(frame)
         if cmd == "status":
@@ -112,7 +106,7 @@ class LlamboPlugin(LenzPlugin):
 
     def sample(self, frame: Frame, encoder: Encoder, n: int, warmstart: bool = False) -> list[dict]:
         blob = self.blob(frame)
-        client = self._client(blob)
+        client = self._client(frame)
         context = blob.get("context") or _read_local_context()
         prompt = _build_prompt(frame, n, context, warmstart=warmstart)
         resp = client.chat(
@@ -137,22 +131,15 @@ class LlamboPlugin(LenzPlugin):
         frame.log_event("llambo", action="sample" if not warmstart else "warmstart", n=len(packed))
         return packed
 
-    def _client(self, blob: dict):
-        llm = blob.get("llm") or {}
-        provider, model = llm.get("provider"), llm.get("model")
-        if not provider or not model:
+    def _client(self, frame: Frame):
+        spec = resolved_plugin_llm(frame, self.blob(frame).get("llm"))
+        if not spec_complete(spec):
             raise PluginError(
-                "llambo requires an LLM: run 'lenz llambo set-llm --provider ... --model ...' "
-                "or pass --sampler-llm-provider / --sampler-llm-model at create"
+                "llambo requires an LLM: it defaults to Sara / `lenz set-llm`, "
+                "or pass --sampler-llm-provider / --sampler-llm-model, "
+                "or run 'lenz llambo set-llm --provider ... --model ...'"
             )
-        api_key = os.environ.get(llm["api_key_env"]) if llm.get("api_key_env") else None
-        return get_client(
-            provider,
-            model,
-            base_url=llm.get("base_url"),
-            api_key=api_key,
-            timeout=SAMPLER_LLM_TIMEOUT,
-        )
+        return client_from_spec(spec, timeout=SAMPLER_LLM_TIMEOUT)
 
 
 _SYSTEM = (

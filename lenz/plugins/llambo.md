@@ -2,7 +2,7 @@
 
 Does not replace the GP. Use it to propose candidates from natural-language context and recent trials, then `score` them against lenz.
 
-Configure a *separate* sampler LLM (same idea as CAKE's kernel LLM):
+Sampling uses Sara's LLM by default. Pass `--sampler-llm-*` or `llambo set-llm` only to pick a different model:
 
 ```bash
 lenz llambo set-llm --state ./state.json --provider openai --model gpt-4.1

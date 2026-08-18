@@ -247,6 +247,14 @@ lenz set-surrogate --state ./state.json --surrogate cake
 lenz set-surrogate --state ./state.json --surrogate fixed
 ```
 
+### `set-llm`
+
+Default LLM inherited by plugins that call a model of their own (CAKE kernel evolution, LLAMBO sampling). Sara's `--provider/--model` is written here automatically. Override a single plugin with `--kernel-llm-*` or `llambo set-llm` instead of this command.
+
+```bash
+lenz set-llm --state ./state.json --provider anthropic --model claude-opus-5
+```
+
 ### `set-region`
 
 Switch the active-region slot. `box` uses `set-bounds` / the original domain. `turbo` occupies the slot with a TuRBO trust region (plugin note below).

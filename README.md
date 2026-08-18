@@ -1,26 +1,40 @@
 # AlphaBO
 
-Plug-in **agentic Bayesian optimization**. An LLM agent (Sara) owns the campaign.
-A BoTorch CLI backend (lenz) owns the trial log, posterior, and acquisition.
-Classical BO methods occupy slots the agent can turn on, inspect, or override.
+A modular framework for **agentic Bayesian optimization**.
 
-This is an independent reimplementation of Sara and lenz from [Agentic Bayesian
-Optimization through Surrogate-Augmented Autoresearch](https://arxiv.org/abs/2608.00316)
-(Brunzema et al., 2026). Not an official Meta repository. The original paper
-has no released code.
+Standard BO fixes a configuration $c = (M, \alpha, B, O, C)$ before the first
+evaluation, then only updates the posterior as trials accumulate. Even methods
+that adapt at runtime follow a schedule chosen in advance. Agentic BO keeps the
+GP posterior and lets an LLM revise $c_{t}$ between evaluations [[1]](#ref-1).
+The trial log $D_{t}$ is independent of the live configuration, so changing
+$c_{t}$ does not discard data.
 
-AlphaBO adds a plugin protocol so methods wrap as backend capabilities the agent
-invokes, which the Meta paper left as future work:
+Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
+instantiates that idea as Sara, a campaign LLM, calling lenz, a BoTorch CLI that
+owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6). AlphaBO keeps that agent and CLI, then turns the backend into a
+plug-in surface: surrogate, region, prior, and sampler are slots. Classical BO
+methods wrap as `lenz` verbs the agent can enable, inspect, or override. The
+control plane matches [MCP](https://modelcontextprotocol.io/). Sara's tools
+remain `bash` and `read`, and plugins register extra verbs on that surface
+instead of adding a second agent.
 
-| Slot | Core default | Plugins |
-|---|---|---|
-| Surrogate \(M\) | fixed Matérn | **CAKE** (Suwandi et al., NeurIPS 2025) |
-| Region \(B\) | box / `set-bounds` | **TuRBO** (Eriksson et al., 2019) |
-| Prior | natural language only | **πBO** (Hvarfner et al., 2022) via `set-belief` |
-| Sampler | BoTorch acqf opt | **LLAMBO** sampling (Liu et al., 2024) |
+![AlphaBO architecture](assets/architecture.svg)
 
-Sara still has only `bash` and `read`. New capability is a `lenz <plugin> ...`
-verb plus a short prompt note. Method state lives in `state.json` under
+This is an independent re-implementation of Sara and lenz [[1]](#ref-1). It is
+not an official Meta repository. The original paper has not released code.
+
+The plugin protocol is new in this implementation. Methods wrap as backend
+capabilities the agent invokes:
+
+| Slot | Default | Plugin | Verbs |
+|---|---|---|---|
+| Surrogate | fixed Matérn | **CAKE** [[2]](#ref-2) | `set-surrogate`, `evolve-kernels`, `kernel-population` |
+| Region | box | **TuRBO** [[3]](#ref-3) | `set-region`, `set-bounds`, `turbo status` |
+| Prior | none | **πBO** [[4]](#ref-4) | `set-belief` |
+| Sampler | BoTorch | **LLAMBO** [[5]](#ref-5) | `set-sampler`, `llambo sample` |
+
+Sara still has only `bash` and `read`. Occupying a slot is a `set-*` verb.
+Plugins may add more verbs. Method state lives in `state.json` under
 `plugins`, not on the live shelf. Reconfiguring never discards trials.
 
 `--no-lenz` drops the backend: Sara proposes configs and calls `./oracle`
@@ -33,7 +47,8 @@ pip install -e .
 ```
 
 Requires Python 3.10+. Dependencies include `torch`, `gpytorch`, `botorch`, and
-LLM clients (`anthropic`, `openai`).
+LLM clients (`anthropic`, `openai`). Copy `.env.example` to `.env` for API
+credentials.
 
 ## `lenz` (no LLM required)
 
@@ -48,46 +63,9 @@ lenz submit --state ./state.json --config '{"x1":1.0,"x2":2.0}' --metrics '{"y":
 lenz incumbent --state ./state.json
 ```
 
-See `examples/branin/run_manual.py` and `sara/prompts/LENZ_REF.md` for a full
-scripted loop and command reference.
-
-## CAKE (Context-Aware Kernel Evolution)
-
-CAKE evolves a GP kernel population during BO. LLMs act as crossover and
-mutation operators. Each objective metric and each constraint metric gets its
-own population. **BAKER** ranks weighted kernel combinations against the
-configured acquisition function (logEI, NEHVI/EHVI, constrained EI, or
-probability-of-feasibility before any feasible point is seen). If populations
-are not ready yet, lenz falls back to the best kernel per metric.
-
-CAKE is **not** part of Sara's agent loop. It runs inside `lenz` on its own
-schedule during `observe`/`submit`, using `--kernel-llm-*` settings independent
-of Sara's provider/model. Any model supported by `llm.factory` works. Tradeoff
-is API cost and latency only.
-
-```bash
-lenz create --state ./state.json \
-  --space '{"x1":{"kind":"range","lower":-5,"upper":10},"x2":{"kind":"range","lower":0,"upper":15}}' \
-  --objectives '{"y":"minimize"}' \
-  --surrogate cake --budget 30 \
-  --kernel-llm-provider openai-compatible --kernel-llm-model your-model-id
-
-lenz kernel-population --state ./state.json
-lenz evolve-kernels --state ./state.json --force
-```
-
-Use with Sara by pinning cake at `lenz create`, or with scripted baselines via
-`run_blind_baseline.py --policy cake`. See `LENZ_REF.md` for
-`set-surrogate`, `evolve-kernels`, and `kernel-population`.
+Command reference: `sara/prompts/LENZ_REF.md`.
 
 ## `sara` (the agent)
-
-Required flags:
-
-- `--context`: markdown problem description
-- `--eval`: shell command that evaluates one config (`sara` appends the config JSON)
-- `--budget`: target number of evaluations
-- `--workdir`: sandbox for `state.json` and `trace.jsonl` (e.g. `./results/logs/my-run`)
 
 ```bash
 sara run \
@@ -98,158 +76,21 @@ sara run \
   --workdir ./results/logs/branin-1
 ```
 
-### LLM providers
-
-Load credentials from `.env` (copy `.env.example`) or pass `--api-key` /
-`--base-url`.
+Required flags: `--context` (problem markdown), `--eval` (command that takes one
+config JSON), `--budget`, `--workdir`.
 
 | `--provider` | Notes |
 |---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
-| `openai-compatible` | Any OpenAI-compatible API. Requires `--base-url`. |
-| `ollama` | Local Ollama at `http://localhost:11434/v1` by default |
+| `openai-compatible` | Requires `--base-url` |
+| `ollama` | `http://localhost:11434/v1` by default |
 
-If `OPENAI_API_KEY` is already set in your shell, `python-dotenv` will not
-override it from `.env`. Use a distinct env var or pass `--api-key` explicitly.
-
-The agent gets two tools (`bash`, `read`) in `--workdir`, matching the paper's
-`pi --tools read,bash` setup. Prompts live in `sara/prompts/SYSTEM.md` and
-`sara/prompts/LENZ_REF.md`. Budget is self-regulated by the agent, with a
-1.5× budget reminder and a hard step cap in `sara/agent.py`.
-
-## Benchmark harness
-
-`benchmarks/` builds anti-memorization sandboxes: renamed parameters, unit-cube
-encoding, and a shifted optimum. Scoring uses a hidden answer key the agent never
-sees. List available functions:
-
-```bash
-python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
-```
-
-Real mixed-type HPO (not a textbook function): `bolt_lora` is the BOLT LoRA
-emulator of Qwen3-8B fine-tuning (7 parameters: float / int / categorical).
-It needs `pip install -e '.[bolt]'` once so the first evaluation can download
-the Hugging Face weights. Scoring uses gap to BOLT's reported empirical best,
-not a closed-form optimum. Blind mode renames parameters but keeps native
-types; torus-shifting is disabled.
-
-**Blind run** (hidden identity, scores true regret afterward):
-
-```bash
-python3 -m benchmarks.run_blind_test \
-  --benchmark hartmann6 --provider anthropic --model claude-opus-5 \
-  --budget 30 --root ./results/logs/blind-1
-```
-
-Pass `--no-lenz` for a Sara-only run: the LLM proposes every point, lenz is
-never created, and the sandbox cannot import or invoke it. That is the probe
-for "can the LLM act as the optimizer itself."
-
-**Revealed run** (real benchmark name and bounds; see disclosure levels below):
-
-```bash
-python3 -m benchmarks.run_noblind_test \
-  --benchmark hartmann6 --provider anthropic --model claude-opus-5 \
-  --budget 5 --root ./results/logs/noblind-hartmann6
-```
-
-Pass `--shift` to keep the same relocated optimum as the blind sandbox. **Vanilla
-baseline** (no LLM): `python3 -m benchmarks.run_blind_baseline --benchmark
-hartmann6 --budget 30 --root ./results/logs/vanilla --policy vanilla`
-
-Pin the backend for a whole run with `--surrogate {fixed,cake}` and `--acqf`.
-CAKE also needs `--kernel-llm-provider` and `--kernel-llm-model`.
-
-## Compare scripts
-
-Compare scripts overlay regret curves across condition folders under
-`results/logs/`. Defaults: budget `100`, seed `42`. Provider and model from
-`scripts/_compare_env.sh`. `run_bolt_lora_compare.sh` is the regime-2 sweep (mixed-type HPO, no textbook
-optimum): vanilla vs cake without Sara, then revealed Sara+lenz,
-Sara+lenz+cake, and Sara-only (no lenz). Completed and in-flight legs are
-skipped, so a crash-and-rerun does not redo vanilla or cake. Shift and
-one-shot disclosure do not apply. To add Sara-only and cake-only onto
-already-finished groups of *other* benchmarks, use `run_complement_backends.sh`.
-
-| Script | What varies | Output dir |
-|---|---|---|
-| `run_benchmark_compare.sh <benchmark>` | backend (vanilla, sara-lenz, sara-lenz-cake) | `results/logs/<benchmark>-compare` |
-| `run_benchmark_noblind_compare.sh <benchmark> [--shift-only]` | same backends, identity revealed | `results/logs/<benchmark>-noblind-compare-3config` |
-| `run_noblind_compare.sh <benchmark> [--config …]` | disclosure level (see below) | `results/logs/<benchmark>-noblind-compare` |
-| `run_bolt_lora_compare.sh [budget] [seed]` | vanilla, cake, sara-lenz, sara-lenz-cake, sara-only; skips completed | `results/logs/bolt_lora-compare` |
-| `run_bolt_lora_followup.sh [list\|1\|2\|3\|all]` | wave 1: generic/misleading context (seed 42); wave 2: domain seeds 7/13; wave 3: seeds 5/11 if still needed | `results/logs/bolt_lora-generic-compare`, `-misleading-compare`, `-seedN-compare` |
-| `run_complement_backends.sh [list\|run]` | add `sara-only` and `cake` into existing groups; skip completed/running | same dirs as above |
-| `run_unclaimed.sh [list\|run] [--rq5]` | leftover legs not finished, in-flight, or queued by those parents | same dirs; RQ5 is new disclosure groups |
-
-The first two scripts hold disclosure fixed and ask which backend wins. The third
-holds the backend fixed and walks through all three disclosure levels.
-
-### Disclosure levels
-
-Used by `run_noblind_compare.sh` and the Python runners (`--shift`, revealed
-`context.md`):
-
-| Level | Identity | Optimum | Typical use |
-|---|---|---|---|
-| **Blind** | Hidden (renamed params, unit cube) | Shifted | Agentic BO with nothing to recall |
-| **Revealed + shifted** | Real name and bounds | Same shift as blind | Does recalled structure help search? |
-| **Revealed, unshifted** | Real name and bounds | Textbook location | One-shot recall probe |
-
-Unshifted revealed runs are one-shot recall probes: use `run_noblind_test` with
-default `--budget 5` and read `one_shot_success` at eval 1. Compare scripts use
-budget 100 so blind, shifted, and unshifted curves share the same x-axis.
-
-```bash
-./scripts/run_benchmark_compare.sh hartmann6
-./scripts/run_benchmark_noblind_compare.sh hartmann6
-./scripts/run_benchmark_noblind_compare.sh hartmann6 100 42 --shift-only
-./scripts/run_noblind_compare.sh hartmann6
-./scripts/run_noblind_compare.sh hartmann6 100 42 --config sara-lenz-cake
-./scripts/run_bolt_lora_compare.sh
-./scripts/run_bolt_lora_compare.sh --list
-./scripts/run_bolt_lora_compare.sh 100 42 --no-agent-only
-./scripts/run_bolt_lora_compare.sh 100 42 --agent-only
-./scripts/run_bolt_lora_followup.sh list
-./scripts/run_bolt_lora_followup.sh 1
-./scripts/run_bolt_lora_followup.sh 2
-```
-
-Override provider/model per run:
-
-```bash
-PROVIDER=anthropic MODEL=claude-opus-5 ./scripts/run_benchmark_compare.sh hartmann6
-```
-
-Other env vars: `ACQF`, `BASE_URL`, `API_KEY`, `EXTRA_BODY`, `KERNEL_LLM_*`,
-`ONE_SHOT_TOL`. Plot all groups:
-
-```bash
-python3 -m benchmarks.plot_all
-python3 -m benchmarks.plot_compare --root ./results/logs/hartmann6-compare
-```
-
-## Run viewer (`sara-viz`)
-
-Local web UI for runs under `results/logs/` (or any `--root`):
-
-```bash
-sara-viz
-sara-viz --root ./results/logs --port 9000
-```
-
-Tabs: Overview (convergence chart), Config, Trials, Trace, Tool use, Kernel
-population (CAKE). **Experiments** mode overlays condition-level regret charts
-(same data as `compare.html`). Compare mode overlays individual runs. Stdlib
-only, no build step.
-
-Runs write `run_meta.json` (provider, model, budget, timestamps) beside
-`state.json` and `trace.jsonl`.
+CAKE and LLAMBO inherit Sara's provider and model. Pass `--kernel-llm-*` or
+`--sampler-llm-*` only to use a different model. TuRBO and πBO do not call an
+LLM.
 
 ## Plugins
-
-`lenz plugins` lists installed modules. Slot verbs:
 
 ```bash
 lenz set-surrogate --state ./state.json --surrogate cake
@@ -258,55 +99,122 @@ lenz set-belief --state ./state.json --prior '{"x":{"dist":"normal","mu":0.3,"si
 lenz set-sampler --state ./state.json --sampler llambo
 ```
 
-Method-specific verbs: `lenz turbo status`, `lenz evolve-kernels --force`,
-`lenz llambo sample --n 8`. Each plugin is also a no-agent `--policy` in
-`run_blind_baseline.py` when that makes sense (`vanilla`, `cake`, `turbo`).
+`lenz plugins` lists installed modules. Add a method by implementing
+`LenzPlugin` in `lenz/plugins/` with a `PROMPT.md` beside it.
 
-Adding a method: implement `LenzPlugin` in `lenz/plugins/`, register it in
-`lenz/plugins/registry.py`, ship a `PROMPT.md` next to it. Do not add fields
-to `Shelf`.
+CAKE evolves a GP kernel population inside `lenz` during `observe`/`submit`
+[[2]](#ref-2). It is not part of Sara's conversation.
 
-## Extending
+```bash
+lenz create --state ./state.json \
+  --space '{"x1":{"kind":"range","lower":-5,"upper":10},"x2":{"kind":"range","lower":0,"upper":15}}' \
+  --objectives '{"y":"minimize"}' \
+  --surrogate cake --budget 30
+```
 
-| Goal | Where to edit |
-|---|---|
-| New benchmark function | `benchmarks/functions.py`, `benchmarks/sandbox.py` |
-| New vanilla baseline policy | `benchmarks/run_blind_baseline.py` (`POLICIES`) |
-| New backend method | `lenz/plugins/` (slot + hooks + CLI verbs). Do not grow `Shelf`. |
-| New compare condition | Add a block in a `scripts/run_*_compare.sh` |
+## Experiments
 
-`benchmarks/plot_compare.py` auto-discovers scored subdirectories. No code
-change needed to add a new condition folder.
+Synthetic functions use an anti-memorization sandbox (renamed parameters, unit
+cube, shifted optimum). Scoring uses a hidden answer key. List functions:
+
+```bash
+python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
+```
+
+```bash
+./scripts/run_synthetic.sh hartmann6
+./scripts/run_synthetic.sh hartmann6 --disclosure revealed
+./scripts/run_synthetic.sh hartmann6 --disclosure revealed-shift
+./scripts/run_synthetic.sh hartmann6 --backend sara-lenz --disclosure all
+```
+
+`--disclosure` is `blind` (default), `revealed`, `revealed-shift`, or `all`.
+`--backend` is a comma list (`vanilla`, `cake`, `turbo`, `sara-lenz`,
+`sara-lenz-cake`, `sara-only`), or `all` for vanilla + sara-lenz +
+sara-lenz-cake. `--disclosure all` needs a single backend.
+
+BoLT LoRA is mixed-type HPO [[7]](#ref-7) (always revealed, no textbook
+optimum):
+
+```bash
+pip install -e '.[bolt]'
+./scripts/run_bolt.sh
+./scripts/run_bolt.sh --backend vanilla,cake
+./scripts/run_bolt.sh --context generic
+```
+
+`--context` is `domain` (default), `generic`, or `misleading`.
+
+Provider and model come from `.env` or `PROVIDER` / `MODEL`. Completed and
+in-flight legs are skipped. Plots land in `compare.html` next to the run, or
+open `sara-viz`.
+
+## Run viewer (`sara-viz`)
+
+```bash
+sara-viz
+sara-viz --root ./results/logs --port 9000
+```
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pip install -e ".[bolt]"   # optional: BOLT LoRA HPO emulator
 pytest
-pytest -m "not slow"
+./scripts/smoke_plugins.sh
+./scripts/smoke_plugins.sh --live
 ```
+
+`--live` issues one CAKE evolve and one LLAMBO sample. `--baseline` adds short
+Hartmann6 vanilla and TuRBO loops.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## References
 
-1. Brunzema, T., Tiao, J., Le, T., De Angeli, G., Xuan, Y., Gligorijevic, V.
+1. <span id="ref-1"></span> Brunzema, P., Tiao, L., Le, N., De Angeli, K., Xuan, Y.,
+   Gligorijevic, D.
    *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch.*
-   Meta, 2026.
+   arXiv:2608.00316, 2026.
    [Paper](https://arxiv.org/abs/2608.00316)
+   No official code (this repo is an independent re-implementation).
 
-2. Suwandi, R., Yin, J., Wang, Y., Li, Y., Chang, Y., Theodoridis, S.
+2. <span id="ref-2"></span> Suwandi, R. C., Yin, F., Wang, J., Li, R., Chang, T.-H.,
+   Theodoridis, S.
    *Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
    LLMs.* NeurIPS 2025.
    [Paper](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
+   [Code](https://github.com/richardcsuwandi/cake)
 
-3. Eriksson, D., Pearce, M., Gardner, J., Turner, R. D., Poloczek, M.
+3. <span id="ref-3"></span> Eriksson, D., Pearce, M., Gardner, J., Turner, R. D.,
+   Poloczek, M.
    *Scalable Global Optimization via Local Bayesian Optimization.* NeurIPS 2019.
+   [Paper](https://arxiv.org/abs/1910.01739)
    [Code](https://github.com/uber-research/TuRBO)
 
-4. Hvarfner, C., Stoll, D., Souza, A., Lindauer, M., Hutter, F., Nardi, L.
+4. <span id="ref-4"></span> Hvarfner, C., Stoll, D., Souza, A., Lindauer, M.,
+   Hutter, F., Nardi, L.
    *πBO: Augmenting Acquisition Functions with User Beliefs for Bayesian
    Optimization.* ICLR 2022.
+   [Paper](https://arxiv.org/abs/2204.11051)
+   [Code](https://github.com/piboauthors/PiBO-Spearmint)
 
-5. Liu, T., Astorga, N., Seedat, N., van der Schaar, M.
+5. <span id="ref-5"></span> Liu, T., Astorga, N., Seedat, N., van der Schaar, M.
    *Large Language Models to Enhance Bayesian Optimization.* ICLR 2024.
+   [Paper](https://arxiv.org/abs/2402.03921)
    [Code](https://github.com/tennisonliu/LLAMBO)
+
+6. <span id="ref-6"></span> Balandat, M., Karrer, B., Jiang, D. R., Daulton, S.,
+   Letham, B., Wilson, A. G., Bakshy, E.
+   *BoTorch: A Framework for Efficient Monte-Carlo Bayesian Optimization.*
+   NeurIPS 2020.
+   [Paper](https://arxiv.org/abs/1910.06403)
+   [Code](https://github.com/meta-pytorch/botorch)
+
+7. <span id="ref-7"></span> Chew, R. W. T., Chen, Z., Hemachandra, A., Low, B. K. H.
+   *BoLT: A Benchmark to Democratize Black-box Optimization Research for
+   Expensive LLM Tasks.* arXiv:2605.17000, 2026.
+   [Paper](https://arxiv.org/abs/2605.17000)
+   [Code](https://github.com/chewwt/bolt)

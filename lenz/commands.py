@@ -11,6 +11,13 @@ import json
 from . import optimize as opt
 from .acquisition import KNOWN_ACQFS, AcqfError
 from .diagnostics import compute_diagnostics
+from .llm_config import (
+    apply_sidecar_plugin_overrides,
+    core_spec_from_sidecar,
+    load_sidecar,
+    spec_complete,
+    spec_from_args,
+)
 from .models import build_model_set
 from .plugins.base import PluginError
 from .plugins.registry import (
@@ -94,6 +101,7 @@ def summary(frame: Frame) -> dict:
         "region": frame.shelf.region,
         "sampler": frame.shelf.sampler,
         "prior": frame.shelf.prior,
+        "default_llm": dict(frame.default_llm or {}),
     }
 
 
@@ -127,7 +135,14 @@ def cmd_create(args) -> tuple[Frame, dict]:
         budget=getattr(args, "budget", None),
     )
     frame = Frame(space=space, shelf=shelf)
+    default = spec_from_args(args, "llm")
+    sidecar = load_sidecar(args.state)
+    if not spec_complete(default):
+        default = core_spec_from_sidecar(sidecar)
+    if spec_complete(default):
+        frame.default_llm = default
     _apply_plugin_create_args(frame, args)
+    apply_sidecar_plugin_overrides(frame, sidecar)
     frame.log_event("create")
     return frame, summary(frame)
 
@@ -206,6 +221,15 @@ def cmd_set_surrogate(frame: Frame, args) -> tuple[Frame, dict]:
     return frame, _slot_summary(frame)
 
 
+def cmd_set_llm(frame: Frame, args) -> tuple[Frame, dict]:
+    spec = spec_from_args(args, "llm")
+    if not spec_complete(spec):
+        raise StateError("set-llm requires --provider and --model")
+    frame.default_llm = spec
+    frame.log_event("set-llm", provider=spec["provider"], model=spec["model"])
+    return frame, {"default_llm": spec}
+
+
 def cmd_set_region(frame: Frame, args) -> tuple[Frame, dict]:
     policy = args.policy
     known = ["box"] + [p.name for p in plugins_for_slot("region")]
@@ -276,6 +300,7 @@ def cmd_status(frame: Frame, args) -> tuple[None, dict]:
         "n_observed": len(frame.observed_trials()),
         "n_in_flight": len(frame.in_flight_trials()),
         "warmup": opt.needs_warmup(frame, encoder),
+        "default_llm": dict(frame.default_llm or {}),
         **_slot_summary(frame),
     }
 

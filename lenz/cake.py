@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import itertools
 import math
-import os
 import random
 import threading
 
@@ -32,7 +31,7 @@ from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 
 from llm.base import LLMClient, Message
-from llm.factory import get_client
+from .llm_config import client_from_spec, resolved_plugin_llm, spec_complete, spec_from_args
 
 from .acquisition import (
     KNOWN_ACQFS,
@@ -87,22 +86,12 @@ def state(frame: Frame) -> dict:
 
 def apply_kernel_args(frame: Frame, args) -> None:
     """Writes --kernel-* / --budget flags into the CAKE blob (and shelf.budget)."""
-    import json
-
     blob = state(frame)
     if getattr(args, "budget", None) is not None:
         frame.shelf.budget = args.budget
-    provider = getattr(args, "kernel_llm_provider", None)
-    model = getattr(args, "kernel_llm_model", None)
-    if provider and model:
-        extra_body = getattr(args, "kernel_llm_extra_body", None)
-        blob["kernel_llm"] = {
-            "provider": provider,
-            "model": model,
-            "base_url": getattr(args, "kernel_llm_base_url", None),
-            "api_key_env": getattr(args, "kernel_llm_api_key_env", None),
-            "extra_body": json.loads(extra_body) if extra_body else None,
-        }
+    spec = spec_from_args(args, "kernel_llm")
+    if spec_complete(spec):
+        blob["kernel_llm"] = spec
     for key in (
         "kernel_population_size",
         "kernel_init_after",
@@ -627,22 +616,13 @@ def maybe_evolve(frame: Frame, encoder: Encoder, force: bool = False) -> bool:
     if len(frame.observed_trials()) < 2:
         return False
 
-    llm_cfg = state(frame)["kernel_llm"]
-    provider, model = llm_cfg.get("provider"), llm_cfg.get("model")
-    if not provider or not model:
+    llm_cfg = resolved_plugin_llm(frame, state(frame).get("kernel_llm"))
+    if not spec_complete(llm_cfg):
         frame.log_event("evolve-kernels", status="skipped", reason="kernel_llm not configured")
         return False
 
-    api_key = os.environ.get(llm_cfg["api_key_env"]) if llm_cfg.get("api_key_env") else None
     try:
-        client = get_client(
-            provider,
-            model,
-            base_url=llm_cfg.get("base_url"),
-            api_key=api_key,
-            timeout=KERNEL_LLM_TIMEOUT_SECONDS,
-            extra_body=llm_cfg.get("extra_body"),
-        )
+        client = client_from_spec(llm_cfg, timeout=KERNEL_LLM_TIMEOUT_SECONDS)
     except Exception as e:
         frame.log_event("evolve-kernels", status="failed", error=str(e))
         return False

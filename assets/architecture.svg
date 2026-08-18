@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">AlphaBO architecture</title>
+  <desc id="desc">Sara is a campaign LLM that calls lenz through bash. lenz is a BoTorch CLI over a persistent Frame. Plugin slots for surrogate, region, prior, and sampler sit on that backend.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#1a365d" flood-opacity=".13"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#3973bd"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="720" rx="28" fill="#f8fafc"/>
+  <text x="600" y="48" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="28" font-weight="700" fill="#172033">AlphaBO</text>
+  <text x="600" y="78" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="16" fill="#526077">Sara calls lenz the way an MCP client calls tools; plugins occupy slots on the backend</text>
+
+  <g font-family="Inter,Arial,sans-serif">
+    <text x="80" y="112" font-size="12" font-weight="700" letter-spacing="1.6" fill="#285f9d">AGENT</text>
+    <g filter="url(#shadow)">
+      <rect x="60" y="124" width="1080" height="128" rx="20" fill="#dbeafe" stroke="#3973bd" stroke-width="2"/>
+    </g>
+    <circle cx="148" cy="188" r="38" fill="#ffffff" stroke="#3973bd" stroke-width="3"/>
+    <text x="148" y="200" text-anchor="middle" font-size="28" font-weight="700" fill="#3973bd">S</text>
+    <text x="210" y="172" font-size="22" font-weight="700" fill="#173b6c">Sara</text>
+    <text x="210" y="196" font-size="14" fill="#294d78">campaign LLM  |  tools: bash, read</text>
+    <text x="210" y="222" font-size="14" fill="#294d78">inspect posterior  |  revise c(t)  |  commit evaluation</text>
+
+    <text x="80" y="288" font-size="12" font-weight="700" letter-spacing="1.6" fill="#526077">TOOL SURFACE</text>
+    <path d="M600 262 V278" stroke="#3973bd" stroke-width="3" marker-end="url(#arrowBlue)"/>
+    <rect x="280" y="300" width="640" height="44" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+    <text x="600" y="328" text-anchor="middle" font-size="15" font-weight="700" fill="#173b6c">lenz &lt;verb&gt; --state state.json  -&gt;  JSON</text>
+
+    <text x="80" y="382" font-size="12" font-weight="700" letter-spacing="1.6" fill="#526077">BACKEND</text>
+    <g filter="url(#shadow)">
+      <rect x="60" y="394" width="1080" height="292" rx="20" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+    </g>
+    <text x="90" y="430" font-size="22" font-weight="700" fill="#2d3748">lenz</text>
+    <text x="160" y="430" font-size="14" fill="#526077">BoTorch CLI over a persistent Frame</text>
+    <text x="90" y="454" font-size="13" fill="#64748b">create / suggest / submit / observe / set-* / plugin verbs</text>
+
+    <rect x="90" y="478" width="230" height="88" rx="12" fill="#fef3c7" stroke="#d7a83d" stroke-width="2"/>
+    <text x="205" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#744b0b">trial log D(t)</text>
+    <text x="205" y="534" text-anchor="middle" font-size="12" fill="#805d1b">configs + outcomes</text>
+    <text x="205" y="552" text-anchor="middle" font-size="12" fill="#805d1b">never discarded</text>
+
+    <rect x="340" y="478" width="250" height="88" rx="12" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
+    <text x="465" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#455468">shelf c(t)</text>
+    <text x="465" y="534" text-anchor="middle" font-size="12" fill="#526077">M, &#945;, B, O, C</text>
+    <text x="465" y="552" text-anchor="middle" font-size="12" fill="#526077">live policy, mutable</text>
+
+    <rect x="610" y="478" width="500" height="88" rx="12" fill="#e9d8fd" stroke="#805ad5" stroke-width="2"/>
+    <text x="860" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#44337a">plugin state</text>
+    <text x="860" y="534" text-anchor="middle" font-size="12" fill="#5d477c">cake / turbo / pibo / llambo blobs</text>
+    <text x="860" y="552" text-anchor="middle" font-size="12" fill="#5d477c">off the shelf; agent-invocable</text>
+
+    <text x="90" y="596" font-size="12" font-weight="700" letter-spacing="1.4" fill="#526077">PLUGIN SLOTS</text>
+    <rect x="90" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+    <text x="210" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">M  surrogate</text>
+    <text x="210" y="650" text-anchor="middle" font-size="12" fill="#526077">fixed  |  CAKE</text>
+
+    <rect x="350" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+    <text x="470" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">B  region</text>
+    <text x="470" y="650" text-anchor="middle" font-size="12" fill="#526077">box  |  TuRBO</text>
+
+    <rect x="610" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+    <text x="730" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">prior</text>
+    <text x="730" y="650" text-anchor="middle" font-size="12" fill="#526077">NL  |  &#960;BO</text>
+
+    <rect x="870" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+    <text x="990" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">sampler</text>
+    <text x="990" y="650" text-anchor="middle" font-size="12" fill="#526077">BoTorch  |  LLAMBO</text>
+  </g>
+</svg>

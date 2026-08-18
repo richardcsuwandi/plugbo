@@ -86,6 +86,8 @@ class Frame:
     # caller having to pass it.
     pending_x_gp: list[dict] = field(default_factory=list)
     plugins: dict[str, dict] = field(default_factory=dict)
+    # Inherited LLM for plugins (CAKE, LLAMBO). Plugin-specific blobs override.
+    default_llm: dict = field(default_factory=dict)
 
     # -- trial log helpers -------------------------------------------------
     def observed_trials(self) -> list[Trial]:
@@ -179,6 +181,7 @@ class Frame:
                 "budget": self.shelf.budget,
             },
             "plugins": self.plugins,
+            "default_llm": self.default_llm,
             "trials": [asdict(t) for t in self.trials],
             "events": self.events,
             "pending_x_gp": self.pending_x_gp,
@@ -226,6 +229,7 @@ class Frame:
             events=obj.get("events", []),
             pending_x_gp=list(obj.get("pending_x_gp") or []),
             plugins=plugins,
+            default_llm=dict(obj.get("default_llm") or {}),
         )
 
 

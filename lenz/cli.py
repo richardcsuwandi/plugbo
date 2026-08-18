@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from . import commands as C
 from .acquisition import AcqfError
+from .llm_config import add_llm_flags
 from .models import ModelError
 from .optimize import OptimizeError
 from .plugins.base import PluginError
@@ -66,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--seed", type=int, default=None, help="pins Sobol warmup (and --acqf sobol) so the same seed replays the same initial design")
     c.add_argument("--budget", type=int, default=None, help="total evaluation budget")
     c.add_argument("--force", action="store_true", help="overwrite an existing state.json")
+    add_llm_flags(
+        c,
+        flag_prefix="--llm",
+        dest_prefix="llm",
+        help_suffix="default LLM for CAKE / LLAMBO (Sara's model if omitted under sara run)",
+    )
     for plugin in all_plugins():
         plugin.add_create_args(c)
 
@@ -101,6 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
     ssur.add_argument("--budget", type=int, default=None)
     for plugin in all_plugins():
         plugin.add_create_args(ssur)
+
+    sllm = sub.add_parser("set-llm", parents=[state_parent], help="default LLM inherited by CAKE and LLAMBO")
+    sllm.add_argument("--provider", dest="llm_provider", required=True)
+    sllm.add_argument("--model", dest="llm_model", required=True)
+    sllm.add_argument("--base-url", dest="llm_base_url", default=None)
+    sllm.add_argument("--api-key-env", dest="llm_api_key_env", default=None)
+    sllm.add_argument("--extra-body", dest="llm_extra_body", default=None)
 
     sreg = sub.add_parser("set-region", parents=[state_parent])
     sreg.add_argument("--policy", required=True, help="box | turbo | ...")
@@ -141,6 +155,7 @@ CORE_DISPATCH = {
     "set-objectives": C.cmd_set_objectives,
     "set-constraints": C.cmd_set_constraints,
     "set-surrogate": C.cmd_set_surrogate,
+    "set-llm": C.cmd_set_llm,
     "set-region": C.cmd_set_region,
     "set-sampler": C.cmd_set_sampler,
     "plugins": C.cmd_plugins,

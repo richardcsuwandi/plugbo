@@ -182,3 +182,170 @@ def test_pibo_wraps_acquisition_scores():
     }
     ranked = score(frame, encoder, [{"x": 0.3}, {"x": 0.9}], ["noisy_logei"])
     assert ranked[0]["noisy_logei"] > ranked[1]["noisy_logei"]
+
+
+def test_create_stores_default_llm(tmp_path):
+    state = tmp_path / "state.json"
+    payload = _run_cli(
+        state,
+        "create",
+        "--space",
+        json.dumps({"x": {"kind": "range", "lower": 0.0, "upper": 1.0}}),
+        "--objectives",
+        json.dumps({"y": "minimize"}),
+        "--llm-provider",
+        "openai",
+        "--llm-model",
+        "gpt-4.1",
+    )
+    assert payload["ok"] is True
+    loaded = json.loads(state.read_text())
+    assert loaded["default_llm"]["provider"] == "openai"
+    assert loaded["default_llm"]["model"] == "gpt-4.1"
+
+
+def test_create_inherits_agent_llm_sidecar(tmp_path):
+    from lenz.llm_config import write_sidecar
+
+    state = tmp_path / "state.json"
+    write_sidecar(tmp_path, {"provider": "anthropic", "model": "claude-opus-5"})
+    payload = _run_cli(
+        state,
+        "create",
+        "--space",
+        json.dumps({"x": {"kind": "range", "lower": 0.0, "upper": 1.0}}),
+        "--objectives",
+        json.dumps({"y": "minimize"}),
+    )
+    assert payload["ok"] is True
+    loaded = json.loads(state.read_text())
+    assert loaded["default_llm"]["provider"] == "anthropic"
+    assert loaded["default_llm"]["model"] == "claude-opus-5"
+
+
+def test_set_llm_cli(tmp_path):
+    state = tmp_path / "state.json"
+    _run_cli(
+        state,
+        "create",
+        "--space",
+        json.dumps({"x": {"kind": "range", "lower": 0.0, "upper": 1.0}}),
+        "--objectives",
+        json.dumps({"y": "minimize"}),
+    )
+    payload = _run_cli(state, "set-llm", "--provider", "openai", "--model", "gpt-4.1")
+    assert payload["ok"] is True
+    loaded = json.loads(state.read_text())
+    assert loaded["default_llm"]["model"] == "gpt-4.1"
+
+
+def test_kernel_llm_override_not_mixed_with_default(tmp_path):
+    state = tmp_path / "state.json"
+    _run_cli(
+        state,
+        "create",
+        "--space",
+        json.dumps({"x": {"kind": "range", "lower": 0.0, "upper": 1.0}}),
+        "--objectives",
+        json.dumps({"y": "minimize"}),
+        "--surrogate",
+        "cake",
+        "--llm-provider",
+        "anthropic",
+        "--llm-model",
+        "claude-opus-5",
+        "--kernel-llm-provider",
+        "openai",
+        "--kernel-llm-model",
+        "gpt-4.1",
+    )
+    loaded = json.loads(state.read_text())
+    assert loaded["default_llm"]["model"] == "claude-opus-5"
+    assert loaded["plugins"]["cake"]["kernel_llm"]["model"] == "gpt-4.1"
+
+
+def test_maybe_evolve_inherits_default_llm(monkeypatch):
+    from lenz import cake
+    from llm.base import ChatResponse, LLMClient
+
+    class FakeClient(LLMClient):
+        def __init__(self):
+            super().__init__(model="fake")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            return ChatResponse(
+                content="Kernel: SE\nAnalysis: x", tool_calls=[], stop_reason="end_turn"
+            )
+
+    frame, encoder = _frame(n=8)
+    frame.shelf.surrogate = "cake"
+    frame.default_llm = {"provider": "openai", "model": "inherited"}
+    client = FakeClient()
+    seen = []
+
+    def fake_client(spec, timeout=None):
+        seen.append(spec)
+        return client
+
+    monkeypatch.setattr("lenz.cake.client_from_spec", fake_client)
+    assert cake.maybe_evolve(frame, encoder, force=True) is True
+    assert seen[0]["model"] == "inherited"
+    assert client.calls >= 1
+
+
+def test_maybe_evolve_kernel_override_wins(monkeypatch):
+    from lenz import cake
+    from llm.base import ChatResponse, LLMClient
+
+    class FakeClient(LLMClient):
+        def __init__(self):
+            super().__init__(model="fake")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            return ChatResponse(
+                content="Kernel: SE\nAnalysis: x", tool_calls=[], stop_reason="end_turn"
+            )
+
+    frame, encoder = _frame(n=8)
+    frame.shelf.surrogate = "cake"
+    frame.default_llm = {"provider": "openai", "model": "inherited"}
+    cake.state(frame)["kernel_llm"] = {"provider": "anthropic", "model": "override"}
+    client = FakeClient()
+    seen = []
+
+    def fake_client(spec, timeout=None):
+        seen.append(spec)
+        return client
+
+    monkeypatch.setattr("lenz.cake.client_from_spec", fake_client)
+    assert cake.maybe_evolve(frame, encoder, force=True) is True
+    assert seen[0]["model"] == "override"
+
+
+def test_llambo_inherits_default_llm(monkeypatch):
+    from lenz.plugins.llambo import LlamboPlugin
+    from llm.base import ChatResponse
+
+    frame, _ = _frame(n=3)
+    frame.default_llm = {"provider": "openai", "model": "inherited"}
+    plugin = LlamboPlugin()
+    class Dummy:
+        def chat(self, messages, tools, system):
+            return ChatResponse(content='[{"x": 0.4}]', tool_calls=[], stop_reason="end_turn")
+
+    seen = []
+
+    def fake_client(spec, timeout=None):
+        seen.append(spec)
+        return Dummy()
+
+    monkeypatch.setattr("lenz.plugins.llambo.client_from_spec", fake_client)
+    packed = plugin.sample(frame, Encoder(frame.space), n=1)
+    assert packed[0]["config"]["x"] == 0.4
+    assert seen[0]["model"] == "inherited"
+    assert plugin.summary(frame)["llm_source"] == "default"
+

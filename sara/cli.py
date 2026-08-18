@@ -11,6 +11,13 @@ from dotenv import load_dotenv
 
 from .agent import run_campaign
 from llm.factory import PROVIDERS, get_client
+from lenz.llm_config import (
+    add_llm_flags,
+    export_api_key,
+    spec_complete,
+    spec_from_args,
+    stamp_workdir,
+)
 from lenz.plugins.registry import all_plugins
 
 load_dotenv()
@@ -77,6 +84,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="pure LLM optimizer: no lenz CLI, no GP, no acquisition. Sara proposes every point.",
     )
+    add_llm_flags(
+        r,
+        flag_prefix="--kernel-llm",
+        dest_prefix="kernel_llm",
+        help_suffix="CAKE override; defaults to --provider/--model",
+    )
+    add_llm_flags(
+        r,
+        flag_prefix="--sampler-llm",
+        dest_prefix="sampler_llm",
+        help_suffix="LLAMBO override; defaults to --provider/--model",
+    )
 
     return p
 
@@ -103,6 +122,24 @@ def cmd_run(args: argparse.Namespace) -> None:
         user_prompt = _user_prompt(context_text, args.eval, args.budget)
 
     client = get_client(args.provider, args.model, base_url=args.base_url, api_key=args.api_key)
+    export_api_key(args.provider, args.api_key)
+    if not no_lenz:
+        overrides = {}
+        cake_spec = spec_from_args(args, "kernel_llm")
+        if spec_complete(cake_spec):
+            overrides["cake"] = cake_spec
+        sampler_spec = spec_from_args(args, "sampler_llm")
+        if spec_complete(sampler_spec):
+            overrides["llambo"] = sampler_spec
+        stamp_workdir(
+            workdir,
+            {
+                "provider": args.provider,
+                "model": args.model,
+                "base_url": args.base_url,
+            },
+            overrides,
+        )
     trace_path = Path(args.trace) if args.trace else workdir / "trace.jsonl"
     meta_path = workdir / "run_meta.json"
 

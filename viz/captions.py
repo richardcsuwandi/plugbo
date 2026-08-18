@@ -27,6 +27,34 @@ _LAYOUTS: list[tuple[str, str]] = [
         "Fixed Sara+Lenz: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
     ),
     (
+        "-disclosure-sara-lenz-cake",
+        "Fixed Sara+Lenz+CAKE: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-disclosure-sara-only",
+        "Fixed Sara-only: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-disclosure-sara-lenz",
+        "Fixed Sara+Lenz: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-disclosure-vanilla",
+        "Fixed vanilla BO: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-disclosure-cake",
+        "Fixed CAKE: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-disclosure-turbo",
+        "Fixed TuRBO: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
+    ),
+    (
+        "-revealed-shift",
+        "Identity revealed, shifted optimum: compare conditions on {bench}.",
+    ),
+    (
         "-misleading-compare",
         "Misleading LoRA folklore in context.md: compare conditions on {bench}.",
     ),
@@ -35,14 +63,29 @@ _LAYOUTS: list[tuple[str, str]] = [
         "Generic context (names and types kept, no LoRA story): compare conditions on {bench}.",
     ),
     (
+        "-generic",
+        "Generic context (names and types kept, no LoRA story): compare conditions on {bench}.",
+    ),
+    (
+        "-misleading",
+        "Misleading LoRA folklore in context.md: compare conditions on {bench}.",
+    ),
+    (
+        "-revealed",
+        "Identity revealed: compare conditions on {bench}.",
+    ),
+    (
+        "-blind",
+        "Blind search: compare conditions on {bench}.",
+    ),
+    (
         "-compare",
         "Blind search: compare vanilla BO, Sara+Lenz, and CAKE on {bench}.",
     ),
 ]
 
-# `*-compare` is a blind backend sweep for textbook functions. bolt_lora-compare
-# is the exception: run_bolt_lora_compare.sh always passes --reveal and writes
-# domain LoRA/Qwen context.md (real names, no textbook optimum).
+# `*-compare` / `*-blind` is a blind backend sweep for textbook functions.
+# bolt_lora-compare and results/logs/bolt_lora are revealed mixed-type HPO.
 _REVEALED_COMPARE_BENCHES = frozenset({"bolt_lora"})
 _BOLT_DOMAIN_CAPTION = (
     "Domain LoRA/Qwen context (real names, no textbook optimum): compare conditions on {bench}."
@@ -81,6 +124,8 @@ def bench_label(benchmark: str) -> str:
 def experiment_caption(group_name: str) -> str:
     """Short goal statement for a compare-group directory name."""
     leaf = group_name.rstrip("/").split("/")[-1]
+    if leaf == "bolt_lora":
+        return _BOLT_DOMAIN_CAPTION.format(bench=bench_label("bolt_lora"))
     seed_m = re.fullmatch(r"(.+)-seed(\d+)-compare", leaf)
     if seed_m:
         return (
@@ -100,6 +145,7 @@ def experiment_caption(group_name: str) -> str:
 BACKEND_LABELS = {
     "vanilla": "Vanilla",
     "cake": "CAKE",
+    "turbo": "TuRBO",
     "sara-lenz": "Sara+lenz",
     "sara-cake": "Sara+CAKE",
     "sara-only": "Sara-only",
@@ -114,6 +160,7 @@ DISCLOSURE_LABELS = {
 _CONDITION_BACKEND = {
     "vanilla": "vanilla",
     "cake": "cake",
+    "turbo": "turbo",
     "sara-lenz": "sara-lenz",
     "sara-lenz-cake": "sara-cake",
     "sara-only": "sara-only",
@@ -123,6 +170,8 @@ _CONDITION_DISCLOSURE = {
     "blind": "blind",
     "noblind": "revealed",
     "noblind-shift": "shifted",
+    "revealed": "revealed",
+    "revealed-shift": "shifted",
 }
 
 _GROUP_BACKEND = {
@@ -149,33 +198,46 @@ def parse_group_leaf(leaf: str) -> dict:
         out["disclosure"] = "revealed"
         out["seed"] = int(seed_m.group(2))
         return out
+    if leaf == "bolt_lora":
+        out["benchmark"] = "bolt_lora"
+        out["axis"] = "backend"
+        out["disclosure"] = "revealed"
+        out["context"] = "domain"
+        return out
     for suffix, _template in _LAYOUTS:
         if leaf.endswith(suffix) and len(leaf) > len(suffix):
             out["benchmark"] = leaf[: -len(suffix)]
-            if suffix == "-compare":
+            if suffix in ("-compare", "-blind"):
                 out["axis"] = "backend"
                 if out["benchmark"] in _REVEALED_COMPARE_BENCHES:
                     out["disclosure"] = "revealed"
                     out["context"] = "domain"
                 else:
                     out["disclosure"] = "blind"
-            elif suffix == "-generic-compare":
+            elif suffix in ("-generic-compare", "-generic"):
                 out["axis"] = "backend"
                 out["disclosure"] = "revealed"
                 out["context"] = "generic"
-            elif suffix == "-misleading-compare":
+            elif suffix in ("-misleading-compare", "-misleading"):
                 out["axis"] = "backend"
                 out["disclosure"] = "revealed"
                 out["context"] = "misleading"
-            elif suffix == "-noblind-compare-3config-shifted":
+            elif suffix in ("-noblind-compare-3config-shifted", "-revealed-shift"):
                 out["axis"] = "backend"
                 out["disclosure"] = "shifted"
-            elif suffix == "-noblind-compare-3config":
+            elif suffix in ("-noblind-compare-3config", "-revealed"):
                 out["axis"] = "backend"
                 out["disclosure"] = "revealed"
-            elif suffix in _GROUP_BACKEND:
+            elif suffix in _GROUP_BACKEND or suffix.startswith("-disclosure-"):
                 out["axis"] = "disclosure"
-                out["backend"] = _GROUP_BACKEND[suffix]
+                out["backend"] = _GROUP_BACKEND.get(suffix) or {
+                    "-disclosure-vanilla": "vanilla",
+                    "-disclosure-cake": "cake",
+                    "-disclosure-turbo": "turbo",
+                    "-disclosure-sara-lenz": "sara-lenz",
+                    "-disclosure-sara-lenz-cake": "sara-cake",
+                    "-disclosure-sara-only": "sara-only",
+                }.get(suffix)
             break
     return out
 

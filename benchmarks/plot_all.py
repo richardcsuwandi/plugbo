@@ -4,8 +4,7 @@ hand on one `--root` at a time.
 
 Auto-discovers "comparison group" directories: any directory whose immediate
 subdirectories each hold a `sandbox_<token>/state.json` -- exactly the shape
-`run_benchmark_compare.sh` / `run_benchmark_noblind_compare.sh` /
-`run_noblind_compare.sh` already produce (one subdirectory per condition).
+`run_synthetic.sh` / `run_bolt.sh` already produce (one subdirectory per condition).
 Each group gets its OWN `compare.html` written in its OWN directory, via
 `plot_compare`'s own `collect_traces`/`build_html` -- this script does not
 merge different groups into one chart (see docs/observations.md: "Do not
