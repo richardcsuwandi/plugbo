@@ -16,6 +16,8 @@ from . import commands as C
 from .acquisition import AcqfError
 from .models import ModelError
 from .optimize import OptimizeError
+from .plugins.base import PluginError
+from .plugins.registry import all_plugins, surrogate_names
 from .space import SpaceError
 from .state import Frame, StateError
 
@@ -54,30 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lenz")
     sub = p.add_subparsers(dest="command", required=True)
 
-    def _add_kernel_args(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--budget", type=int, default=None, help="total evaluation budget (used by the kernel-evolution freeze schedule)")
-        sp.add_argument("--kernel-llm-provider", default=None)
-        sp.add_argument("--kernel-llm-model", default=None)
-        sp.add_argument("--kernel-llm-base-url", default=None)
-        sp.add_argument("--kernel-llm-api-key-env", default=None, help="env var NAME holding the key -- never the key itself")
-        sp.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body, e.g. '{\"enable_thinking\": false}'")
-        sp.add_argument("--kernel-population-size", type=int, default=None)
-        sp.add_argument("--kernel-init-after", type=int, default=None)
-        sp.add_argument("--kernel-evolve-every", type=int, default=None)
-        sp.add_argument("--kernel-freeze-fraction", type=float, default=None)
-        sp.add_argument("--kernel-num-crossover", type=int, default=None)
-        sp.add_argument("--kernel-mutation-prob", type=float, default=None)
-
     c = sub.add_parser("create", parents=[state_parent])
     c.add_argument("--space", required=True)
     c.add_argument("--objectives", required=True)
     c.add_argument("--constraints", default=None)
     c.add_argument("--acqf", default="noisy_logei")
     c.add_argument("--beta", type=float, default=None)
-    c.add_argument("--surrogate", default="fixed", choices=["fixed", "cake"])
+    c.add_argument("--surrogate", default="fixed", choices=surrogate_names())
     c.add_argument("--seed", type=int, default=None, help="pins Sobol warmup (and --acqf sobol) so the same seed replays the same initial design")
+    c.add_argument("--budget", type=int, default=None, help="total evaluation budget")
     c.add_argument("--force", action="store_true", help="overwrite an existing state.json")
-    _add_kernel_args(c)
+    for plugin in all_plugins():
+        plugin.add_create_args(c)
 
     s = sub.add_parser("suggest", parents=[state_parent])
     s.add_argument("--q", type=int, default=1)
@@ -107,14 +97,18 @@ def build_parser() -> argparse.ArgumentParser:
     scon.add_argument("--constraints", required=True)
 
     ssur = sub.add_parser("set-surrogate", parents=[state_parent])
-    ssur.add_argument("--surrogate", required=True, choices=["fixed", "cake"])
-    _add_kernel_args(ssur)
+    ssur.add_argument("--surrogate", required=True, choices=surrogate_names())
+    ssur.add_argument("--budget", type=int, default=None)
+    for plugin in all_plugins():
+        plugin.add_create_args(ssur)
 
-    evk = sub.add_parser("evolve-kernels", parents=[state_parent])
-    evk.add_argument("--force", action="store_true")
+    sreg = sub.add_parser("set-region", parents=[state_parent])
+    sreg.add_argument("--policy", required=True, help="box | turbo | ...")
 
-    sub.add_parser("kernel-population", parents=[state_parent])
+    ssam = sub.add_parser("set-sampler", parents=[state_parent])
+    ssam.add_argument("--sampler", required=True, help="botorch | llambo | ...")
 
+    sub.add_parser("plugins", parents=[state_parent])
     sub.add_parser("status", parents=[state_parent])
     sub.add_parser("diagnostics", parents=[state_parent])
 
@@ -132,10 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("pareto", parents=[state_parent])
 
+    for plugin in all_plugins():
+        plugin.add_parser(sub, state_parent)
+
     return p
 
 
-DISPATCH = {
+CORE_DISPATCH = {
     "suggest": C.cmd_suggest,
     "submit": C.cmd_submit,
     "observe": C.cmd_observe,
@@ -144,8 +141,9 @@ DISPATCH = {
     "set-objectives": C.cmd_set_objectives,
     "set-constraints": C.cmd_set_constraints,
     "set-surrogate": C.cmd_set_surrogate,
-    "evolve-kernels": C.cmd_evolve_kernels,
-    "kernel-population": C.cmd_kernel_population,
+    "set-region": C.cmd_set_region,
+    "set-sampler": C.cmd_set_sampler,
+    "plugins": C.cmd_plugins,
     "status": C.cmd_status,
     "diagnostics": C.cmd_diagnostics,
     "predict": C.cmd_predict,
@@ -155,7 +153,29 @@ DISPATCH = {
     "pareto": C.cmd_pareto,
 }
 
-KNOWN_ERRORS = (SpaceError, StateError, ModelError, OptimizeError, AcqfError, KeyError, ValueError, TypeError)
+
+def _dispatch_fn(command: str):
+    if command in CORE_DISPATCH:
+        return CORE_DISPATCH[command]
+    for plugin in all_plugins():
+        fn = plugin.commands().get(command)
+        if fn is not None:
+            return fn
+    raise KeyError(command)
+
+
+KNOWN_ERRORS = (
+    SpaceError,
+    StateError,
+    ModelError,
+    OptimizeError,
+    AcqfError,
+    PluginError,
+    C.SurrogateError,
+    KeyError,
+    ValueError,
+    TypeError,
+)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -179,7 +199,7 @@ def main(argv: list[str] | None = None) -> None:
             _print_err(command, f"no state found at '{args.state}'; run 'create' first")
             return
 
-        fn = DISPATCH[command]
+        fn = _dispatch_fn(command)
         new_frame, result = fn(frame, args)
         if new_frame is not None:
             new_frame.save(args.state)

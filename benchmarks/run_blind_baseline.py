@@ -57,6 +57,19 @@ POLICIES: dict[str, Policy] = {
 }
 
 
+def _turbo_suggest(state_path: Path, sandbox: Path) -> dict:
+    status = lenz(state_path, "status")
+    if status.get("region") != "turbo":
+        lenz(state_path, "set-region", "--policy", "turbo")
+    return lenz(state_path, "suggest")[0]["config"]
+
+
+POLICIES["turbo"] = Policy(
+    lenz_create_args=["--acqf", "noisy_logei", "--surrogate", "fixed"],
+    suggest=_turbo_suggest,
+)
+
+
 def run_blind_baseline(
     benchmark_name: str,
     budget: int,

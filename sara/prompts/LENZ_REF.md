@@ -240,40 +240,48 @@ Constraints can use `upper`, `lower`, or both. Pass an empty list to clear all c
 
 ### `set-surrogate`
 
-Switch between lenz's fixed Matérn kernel and an adaptive **CAKE** kernel population. With `--surrogate cake`, lenz maintains a separate kernel population for each objective metric and each constraint metric. **BAKER** ranks weighted kernel combinations using the study's configured acquisition function (logEI, NEHVI/EHVI, constrained EI, or probability-of-feasibility). If populations are not ready, lenz falls back to the best kernel per metric.
+Switch the surrogate slot. `fixed` is a Matérn GP. `cake` occupies the slot with CAKE (see the CAKE plugin note appended to this reference).
 
 ```bash
-lenz set-surrogate --state ./state.json --surrogate cake \
-  --budget 30 \
-  --kernel-llm-provider openai-compatible \
-  --kernel-llm-model your-model-id \
-  --kernel-llm-base-url https://api.example.com/v1 \
-  --kernel-llm-api-key-env MY_KERNEL_LLM_API_KEY
+lenz set-surrogate --state ./state.json --surrogate cake
+lenz set-surrogate --state ./state.json --surrogate fixed
 ```
 
-With `--surrogate cake`, lenz evolves a population of composite GP kernels (crossover/mutation via a *separate* LLM call, distinct from your own reasoning) and ranks kernel-query pairs with BAKER (BIC fitness × the study's configured acquisition value). This happens automatically and asynchronously to your own reasoning: on a schedule lenz tracks itself (roughly every few new observations, after enough data exists, frozen past a configurable fraction of the budget), not on every trial and not because you asked for it. You do not need to trigger it — just keep calling `suggest`/`submit`/`observe` as usual; a `submit --metrics`/`observe` call that happens to land on a scheduled evolution step will simply take longer (it makes 1-2 LLM calls of its own). Same options are accepted by `create`.
+### `set-region`
 
-Only reconfigure the `--kernel-*` schedule/LLM options if you have a specific reason to; the defaults are reasonable.
-
-### `evolve-kernels`
-
-Force an immediate kernel-evolution round outside the normal schedule — use this after a regime change you've noticed (e.g. `diagnostics` shows the surrogate's `cv_r2` has cratered, or you just reconfigured the problem) that the scheduled cadence wouldn't otherwise catch in time.
+Switch the active-region slot. `box` uses `set-bounds` / the original domain. `turbo` occupies the slot with a TuRBO trust region (plugin note below).
 
 ```bash
-lenz evolve-kernels --state ./state.json --force
+lenz set-region --state ./state.json --policy turbo
+lenz set-region --state ./state.json --policy box
 ```
 
-Without `--force`, this only evolves if the schedule says it's due (rarely useful directly; the automatic trigger inside `submit`/`observe` already does this). Requires `surrogate == "cake"`.
+### `set-sampler`
 
-### `kernel-population`
-
-Read-only. Inspect the current kernel population and which one is winning.
+Switch the candidate sampler. `botorch` optimizes the acquisition. `llambo` asks an LLM for candidates (plugin note below).
 
 ```bash
-lenz kernel-population --state ./state.json
+lenz set-sampler --state ./state.json --sampler botorch
+lenz set-sampler --state ./state.json --sampler llambo
 ```
 
-Returns `population` (each member's expression, BIC, and the generation it was introduced), `best` (lowest-BIC expression), and the evolution schedule state (`generation`, `frozen`). Requires `surrogate == "cake"`.
+### `set-belief`
+
+Compile a mathematical prior over the optimum and occupy the prior slot with πBO. The prior multiplies the acquisition and decays over trials.
+
+```bash
+lenz set-belief --state ./state.json \
+  --prior '{"x":{"dist":"normal","mu":0.3,"sigma":0.1}}' \
+  --decay-beta 10
+```
+
+### `plugins`
+
+List installed modules and which slots they currently occupy.
+
+```bash
+lenz plugins --state ./state.json
+```
 
 ### `status`
 
@@ -407,5 +415,7 @@ Every in-flight config must eventually be observed — track which are still pen
 - Need best current point: `incumbent`.
 - Need multi-objective front: `pareto`.
 - Need an adaptive kernel instead of the fixed default: `set-surrogate --surrogate cake`.
-- Need to force a kernel update after a regime change: `evolve-kernels --force`.
-- Need to see the current kernel population: `kernel-population`.
+- Need a trust-region local search: `set-region --policy turbo`.
+- Need to compile a numeric prior: `set-belief --prior '{...}'`.
+- Need LLM candidate proposals: `llambo sample` then `score`, or `set-sampler --sampler llambo`.
+- Need to see installed modules: `plugins`.

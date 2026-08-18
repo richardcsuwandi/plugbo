@@ -192,7 +192,30 @@ def _kernel_generations(state: dict) -> list[dict]:
     return [e for e in events if e.get("command") == "evolve-kernels" and "generation" in e and "population" in e]
 
 
-_RECONFIG_COMMANDS = {"set-acqf", "set-bounds", "set-objectives", "set-constraints", "set-surrogate"}
+def _cake_blob(state: dict) -> dict:
+    plugins = state.get("plugins") or {}
+    if "cake" in plugins:
+        return plugins["cake"]
+    shelf = state.get("shelf") or {}
+    return {
+        "kernel_populations": shelf.get("kernel_populations") or {},
+        "kernel_evolution_states": shelf.get("kernel_evolution_states") or {},
+        "kernel_population": shelf.get("kernel_population") or [],
+        "kernel_evolution_state": shelf.get("kernel_evolution_state"),
+        "kernel_population_size": shelf.get("kernel_population_size"),
+    }
+
+
+_RECONFIG_COMMANDS = {
+    "set-acqf",
+    "set-bounds",
+    "set-objectives",
+    "set-constraints",
+    "set-surrogate",
+    "set-region",
+    "set-sampler",
+    "set-belief",
+}
 
 
 def _reconfigurations(state: dict) -> list[dict]:

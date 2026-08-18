@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentic-bo"
-version = "0.1.0"
-description = "Agentic Bayesian Optimization: Sara (LLM agent) + lenz (BoTorch backend)"
+name = "alphabo"
+version = "0.2.0"
+description = "AlphaBO: plug-in agentic Bayesian optimization (Sara + lenz)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -34,6 +34,7 @@ include = ["lenz*", "sara*", "benchmarks*", "llm*", "viz*"]
 
 [tool.setuptools.package-data]
 viz = ["static/*"]
+lenz = ["plugins/*.md"]
 
 [tool.pytest.ini_options]
 markers = ["slow: end-to-end tests that fit several GPs (deselect with -m 'not slow')"]

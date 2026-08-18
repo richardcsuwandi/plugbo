@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from .agent import run_campaign
 from llm.factory import PROVIDERS, get_client
+from lenz.plugins.registry import all_plugins
 
 load_dotenv()
 
@@ -20,7 +21,13 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 def _system_prompt() -> str:
     system = (PROMPTS_DIR / "SYSTEM.md").read_text()
     lenz_ref = (PROMPTS_DIR / "LENZ_REF.md").read_text()
-    return f"{system}\n\n{lenz_ref}"
+    plugin_notes = []
+    for plugin in all_plugins():
+        path = plugin.prompt_path()
+        if path is not None:
+            plugin_notes.append(path.read_text().strip())
+    extra = ("\n\n".join(plugin_notes) + "\n") if plugin_notes else ""
+    return f"{system}\n\n{lenz_ref}\n\n{extra}"
 
 
 def _system_prompt_sara_only() -> str:

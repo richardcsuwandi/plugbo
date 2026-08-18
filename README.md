@@ -1,39 +1,30 @@
-# agentic-bo
+# AlphaBO
 
-Implementation of **agentic Bayesian optimization** from [Agentic Bayesian
+Plug-in **agentic Bayesian optimization**. An LLM agent (Sara) owns the campaign.
+A BoTorch CLI backend (lenz) owns the trial log, posterior, and acquisition.
+Classical BO methods occupy slots the agent can turn on, inspect, or override.
+
+This is an independent reimplementation of Sara and lenz from [Agentic Bayesian
 Optimization through Surrogate-Augmented Autoresearch](https://arxiv.org/abs/2608.00316)
-(2026), with **CAKE** (Context-Aware Kernel Evolution) integrated as a
-first-class surrogate module from [Adaptive Kernel Design for Bayesian
-Optimization Is a Piece of CAKE with
-LLMs](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
-(NeurIPS 2025).
+(Brunzema et al., 2026). Not an official Meta repository. The original paper
+has no released code.
 
-Standard BO fixes its policy before the first evaluation and never changes it.
-Agentic BO puts an LLM agent in charge of surrogate, acquisition, bounds, and
-objectives while a BoTorch backend still fits models and optimizes acquisition.
-CAKE targets a separate bottleneck: which GP kernel to use as data arrives,
-via LLM-guided crossover and mutation plus BAKER ranking.
+AlphaBO adds a plugin protocol so methods wrap as backend capabilities the agent
+invokes, which the Meta paper left as future work:
 
-Three pieces:
+| Slot | Core default | Plugins |
+|---|---|---|
+| Surrogate \(M\) | fixed Matérn | **CAKE** (Suwandi et al., NeurIPS 2025) |
+| Region \(B\) | box / `set-bounds` | **TuRBO** (Eriksson et al., 2019) |
+| Prior | natural language only | **πBO** (Hvarfner et al., 2022) via `set-belief` |
+| Sampler | BoTorch acqf opt | **LLAMBO** sampling (Liu et al., 2024) |
 
-- **`lenz`**: stateless BoTorch/GPyTorch CLI backend. Each command loads
-  `state.json`, runs one operation, saves, and prints one JSON line.
-  Reconfiguring the problem never discards prior trials. Default surrogate is
-  fixed Matérn (`--surrogate fixed`).
-- **`CAKE`**: adaptive GP kernel evolution with LLMs. A population of
-  composite kernels maintained on a schedule inside `lenz`, with **separate**
-  `--kernel-llm-*` calls (no shared conversation with Sara). Enabled via
-  `--surrogate cake`. Code: `lenz/cake.py`.
-- **`sara`**: LLM agent that drives `lenz` with `bash` and `read` only,
-  sandboxed to a working directory, using system prompts from the Meta paper
-  appendix. Sara frames the problem, calls `lenz create`, and loops
-  suggest/evaluate/observe. She can pin `fixed` or `cake` for the whole run.
-  `--no-lenz` drops the backend entirely: Sara proposes configs and calls
-  `./oracle` herself (the test of whether the LLM can be the optimizer).
+Sara still has only `bash` and `read`. New capability is a `lenz <plugin> ...`
+verb plus a short prompt note. Method state lives in `state.json` under
+`plugins`, not on the live shelf. Reconfiguring never discards trials.
 
-This is an **independent from-scratch reimplementation** of the agentic BO stack.
-The Meta paper has no released reference code. This repo is **not** an official
-Meta implementation. See [References](#references) for citations.
+`--no-lenz` drops the backend: Sara proposes configs and calls `./oracle`
+herself (the test of whether the LLM can be the optimizer).
 
 ## Install
 
@@ -256,13 +247,32 @@ only, no build step.
 Runs write `run_meta.json` (provider, model, budget, timestamps) beside
 `state.json` and `trace.jsonl`.
 
+## Plugins
+
+`lenz plugins` lists installed modules. Slot verbs:
+
+```bash
+lenz set-surrogate --state ./state.json --surrogate cake
+lenz set-region --state ./state.json --policy turbo
+lenz set-belief --state ./state.json --prior '{"x":{"dist":"normal","mu":0.3,"sigma":0.1}}'
+lenz set-sampler --state ./state.json --sampler llambo
+```
+
+Method-specific verbs: `lenz turbo status`, `lenz evolve-kernels --force`,
+`lenz llambo sample --n 8`. Each plugin is also a no-agent `--policy` in
+`run_blind_baseline.py` when that makes sense (`vanilla`, `cake`, `turbo`).
+
+Adding a method: implement `LenzPlugin` in `lenz/plugins/`, register it in
+`lenz/plugins/registry.py`, ship a `PROMPT.md` next to it. Do not add fields
+to `Shelf`.
+
 ## Extending
 
 | Goal | Where to edit |
 |---|---|
 | New benchmark function | `benchmarks/functions.py`, `benchmarks/sandbox.py` |
 | New vanilla baseline policy | `benchmarks/run_blind_baseline.py` (`POLICIES`) |
-| New lenz capability (acquisition, surrogate) | `lenz/acquisition.py`, `lenz/cake.py`, `lenz/models.py` |
+| New backend method | `lenz/plugins/` (slot + hooks + CLI verbs). Do not grow `Shelf`. |
 | New compare condition | Add a block in a `scripts/run_*_compare.sh` |
 
 `benchmarks/plot_compare.py` auto-discovers scored subdirectories. No code
@@ -288,3 +298,15 @@ pytest -m "not slow"
    *Adaptive Kernel Design for Bayesian Optimization Is a Piece of CAKE with
    LLMs.* NeurIPS 2025.
    [Paper](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf)
+
+3. Eriksson, D., Pearce, M., Gardner, J., Turner, R. D., Poloczek, M.
+   *Scalable Global Optimization via Local Bayesian Optimization.* NeurIPS 2019.
+   [Code](https://github.com/uber-research/TuRBO)
+
+4. Hvarfner, C., Stoll, D., Souza, A., Lindauer, M., Hutter, F., Nardi, L.
+   *πBO: Augmenting Acquisition Functions with User Beliefs for Bayesian
+   Optimization.* ICLR 2022.
+
+5. Liu, T., Astorga, N., Seedat, N., van der Schaar, M.
+   *Large Language Models to Enhance Bayesian Optimization.* ICLR 2024.
+   [Code](https://github.com/tennisonliu/LLAMBO)

@@ -12,6 +12,7 @@ from botorch.utils.sampling import draw_sobol_samples
 from . import acquisition as acq
 from . import cake as cake_module
 from .models import MIN_POINTS, build_model_set
+from .plugins.registry import occupant
 from .space import DTYPE, Encoder
 from .state import Frame, Trial
 
@@ -29,6 +30,11 @@ def needs_warmup(frame: Frame, encoder: Encoder) -> bool:
 
 
 def active_bounds(frame: Frame, encoder: Encoder) -> torch.Tensor:
+    region = occupant(frame, "region")
+    if region is not None:
+        bounds = region.active_bounds(frame, encoder)
+        if bounds is not None:
+            return bounds
     return encoder.encode_bounds(frame.shelf.bounds)
 
 
@@ -109,13 +115,20 @@ def _cake_population_all_unfittable(frame: Frame) -> bool:
         return False
     any_pop = False
     for target in targets:
-        pop = frame.shelf.kernel_populations.get(target) or []
+        pop = cake_module.state(frame)["kernel_populations"].get(target) or []
         if not pop:
             continue
         any_pop = True
         if cake_module.get_best_kernel(frame, target) is not None:
             return False
     return any_pop
+
+
+def _wrap_acqf(acqf, frame: Frame, encoder: Encoder):
+    prior = occupant(frame, "prior")
+    if prior is None:
+        return acqf
+    return prior.wrap_acqf(acqf, frame, encoder)
 
 
 def _eval_acqf(acqf, x: torch.Tensor) -> float:
@@ -191,6 +204,13 @@ def suggest(
         bounds = active_bounds(frame, encoder)
 
     plain_call = bounds_override is None and around is None
+    if plain_call:
+        sampler = occupant(frame, "sampler")
+        if sampler is not None:
+            proposed = sampler.propose(frame, encoder, q, bounds)
+            if proposed is not None:
+                return _commit_suggestions(frame, proposed)
+
     if plain_call and cake_module.can_use_baker(frame) and not needs_warmup(frame, encoder):
         try:
             return _commit_suggestions(
@@ -221,6 +241,7 @@ def suggest(
             acqf = acq.build_moo_acqf(model_set, frame, name, X_pending)
         else:
             acqf = acq.build_single_objective_acqf(model_set, frame, name, frame.shelf.acqf_params, X_pending)
+        acqf = _wrap_acqf(acqf, frame, encoder)
         X, _ = optimize_acqf(
             acq_function=acqf, bounds=bounds, q=q, num_restarts=NUM_RESTARTS, raw_samples=RAW_SAMPLES
         )
@@ -253,6 +274,7 @@ def score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[
             acqf = acq.build_moo_acqf(model_set, frame, name, X_pending)
         else:
             acqf = acq.build_single_objective_acqf(model_set, frame, name, frame.shelf.acqf_params, X_pending)
+        acqf = _wrap_acqf(acqf, frame, encoder)
         for cfg, r in zip(configs, results):
             r[name] = _eval_acqf(acqf, encoder.encode(cfg))
     return results

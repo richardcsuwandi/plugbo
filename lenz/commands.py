@@ -8,17 +8,24 @@ from __future__ import annotations
 
 import json
 
-from . import cake
 from . import optimize as opt
 from .acquisition import KNOWN_ACQFS, AcqfError
 from .diagnostics import compute_diagnostics
 from .models import build_model_set
+from .plugins.base import PluginError
+from .plugins.registry import (
+    all_plugins,
+    enabled_plugins,
+    occupant,
+    plugin_by_name,
+    plugins_for_slot,
+    surrogate_names,
+)
 from .space import Encoder, SearchSpace
 from .state import Constraint, Frame, Objective, Shelf, StateError
 
 MOO_ONLY_ACQFS = {"nehvi", "ehvi"}
 SINGLE_ONLY_ACQFS = {"noisy_logei", "logei", "pi", "ucb"}
-SURROGATES = {"fixed", "cake"}
 
 
 class SurrogateError(ValueError):
@@ -27,8 +34,8 @@ class SurrogateError(ValueError):
 
 def _check_surrogate_compat(surrogate: str, is_moo: bool, has_constraints: bool) -> None:
     del is_moo, has_constraints
-    if surrogate not in SURROGATES:
-        raise SurrogateError(f"unknown surrogate '{surrogate}' (expected 'fixed' or 'cake')")
+    if surrogate not in surrogate_names():
+        raise SurrogateError(f"unknown surrogate '{surrogate}' (expected {surrogate_names()})")
 
 
 class NoMatchingSubmission(StateError):
@@ -84,43 +91,15 @@ def summary(frame: Frame) -> dict:
         "acqf": frame.shelf.acqf,
         "is_moo": frame.shelf.is_moo,
         "surrogate": frame.shelf.surrogate,
+        "region": frame.shelf.region,
+        "sampler": frame.shelf.sampler,
+        "prior": frame.shelf.prior,
     }
 
 
-def _kernel_llm_from_args(args) -> dict:
-    provider = getattr(args, "kernel_llm_provider", None)
-    model = getattr(args, "kernel_llm_model", None)
-    if not provider or not model:
-        return {}
-    extra_body = getattr(args, "kernel_llm_extra_body", None)
-    return {
-        "provider": provider,
-        "model": model,
-        "base_url": getattr(args, "kernel_llm_base_url", None),
-        "api_key_env": getattr(args, "kernel_llm_api_key_env", None),
-        "extra_body": json.loads(extra_body) if extra_body else None,
-    }
-
-
-def _apply_kernel_args(shelf: Shelf, args) -> None:
-    """Applies --kernel-* / --surrogate / --budget flags shared by `create` and `set-surrogate`."""
-    if getattr(args, "budget", None) is not None:
-        shelf.budget = args.budget
-    kernel_llm = _kernel_llm_from_args(args)
-    if kernel_llm:
-        shelf.kernel_llm = kernel_llm
-    if getattr(args, "kernel_population_size", None) is not None:
-        shelf.kernel_population_size = args.kernel_population_size
-    if getattr(args, "kernel_init_after", None) is not None:
-        shelf.kernel_init_after = args.kernel_init_after
-    if getattr(args, "kernel_evolve_every", None) is not None:
-        shelf.kernel_evolve_every = args.kernel_evolve_every
-    if getattr(args, "kernel_freeze_fraction", None) is not None:
-        shelf.kernel_freeze_fraction = args.kernel_freeze_fraction
-    if getattr(args, "kernel_num_crossover", None) is not None:
-        shelf.kernel_num_crossover = args.kernel_num_crossover
-    if getattr(args, "kernel_mutation_prob", None) is not None:
-        shelf.kernel_mutation_prob = args.kernel_mutation_prob
+def _apply_plugin_create_args(frame: Frame, args) -> None:
+    for plugin in all_plugins():
+        plugin.apply_create_args(frame, args)
 
 
 # -- commands ---------------------------------------------------------------
@@ -145,9 +124,10 @@ def cmd_create(args) -> tuple[Frame, dict]:
         bounds={},
         surrogate=surrogate,
         seed=getattr(args, "seed", None),
+        budget=getattr(args, "budget", None),
     )
-    _apply_kernel_args(shelf, args)
     frame = Frame(space=space, shelf=shelf)
+    _apply_plugin_create_args(frame, args)
     frame.log_event("create")
     return frame, summary(frame)
 
@@ -171,7 +151,8 @@ def cmd_submit(frame: Frame, args) -> tuple[Frame, dict]:
     trial = frame.submit(config, metrics)
     frame.log_event("submit", trial_id=trial.trial_id, observed=metrics is not None)
     if metrics is not None:
-        cake.maybe_evolve(frame, Encoder(frame.space))
+        for plugin in enabled_plugins(frame):
+            plugin.on_observe(frame, trial)
     return frame, {"trial_id": trial.trial_id, "config": trial.config, "status": trial.status}
 
 
@@ -183,7 +164,8 @@ def cmd_observe(frame: Frame, args) -> tuple[Frame, dict]:
         outstanding = [t.config for t in frame.in_flight_trials()]
         raise NoMatchingSubmission(outstanding)
     frame.log_event("observe", trial_id=trial.trial_id)
-    cake.maybe_evolve(frame, Encoder(frame.space))
+    for plugin in enabled_plugins(frame):
+        plugin.on_observe(frame, trial)
     return frame, {"trial_id": trial.trial_id, "config": trial.config, "metrics": trial.metrics}
 
 
@@ -219,44 +201,65 @@ def cmd_set_constraints(frame: Frame, args) -> tuple[Frame, dict]:
 def cmd_set_surrogate(frame: Frame, args) -> tuple[Frame, dict]:
     _check_surrogate_compat(args.surrogate, is_moo=frame.shelf.is_moo, has_constraints=bool(frame.shelf.constraints))
     frame.shelf.surrogate = args.surrogate
-    _apply_kernel_args(frame.shelf, args)
+    _apply_plugin_create_args(frame, args)
     frame.log_event("set-surrogate", surrogate=args.surrogate)
-    return frame, _surrogate_summary(frame)
+    return frame, _slot_summary(frame)
 
 
-def cmd_evolve_kernels(frame: Frame, args) -> tuple[Frame, dict]:
-    if frame.shelf.surrogate != "cake":
-        raise SurrogateError("evolve-kernels requires surrogate 'cake'; run 'set-surrogate --surrogate cake' first")
-    ran = cake.maybe_evolve(frame, Encoder(frame.space), force=bool(args.force))
-    return frame, {"evolved": ran, **_surrogate_summary(frame)}
+def cmd_set_region(frame: Frame, args) -> tuple[Frame, dict]:
+    policy = args.policy
+    known = ["box"] + [p.name for p in plugins_for_slot("region")]
+    if policy not in known:
+        raise PluginError(f"unknown region policy '{policy}' (expected {known})")
+    frame.shelf.region = policy
+    if policy != "box":
+        plugin = plugin_by_name(policy)
+        plugin.ensure(frame, Encoder(frame.space)) if hasattr(plugin, "ensure") else None
+    frame.log_event("set-region", region=policy)
+    return frame, {"region": frame.shelf.region, **_slot_summary(frame)}
 
 
-def cmd_kernel_population(frame: Frame, args) -> tuple[None, dict]:
-    if frame.shelf.surrogate != "cake":
-        raise SurrogateError("kernel-population requires surrogate 'cake'")
-    targets = cake.cake_targets(frame)
+def cmd_set_sampler(frame: Frame, args) -> tuple[Frame, dict]:
+    name = args.sampler
+    known = ["botorch"] + [p.name for p in plugins_for_slot("sampler")]
+    if name not in known:
+        raise PluginError(f"unknown sampler '{name}' (expected {known})")
+    frame.shelf.sampler = name
+    frame.log_event("set-sampler", sampler=name)
+    return frame, {"sampler": frame.shelf.sampler, **_slot_summary(frame)}
+
+
+def cmd_plugins(frame: Frame, args) -> tuple[None, dict]:
+    installed = [
+        {
+            "name": p.name,
+            "slot": p.slot,
+            "occupied": occupant(frame, p.slot) is p,
+        }
+        for p in all_plugins()
+    ]
     return None, {
-        "targets": targets,
-        "populations": {t: frame.shelf.kernel_populations.get(t, []) for t in targets},
-        "best": cake.get_best_kernel(frame),
-        "evolution_states": frame.shelf.kernel_evolution_states,
+        "slots": {
+            "surrogate": frame.shelf.surrogate,
+            "region": frame.shelf.region,
+            "sampler": frame.shelf.sampler,
+            "prior": frame.shelf.prior,
+        },
+        "plugins": installed,
     }
 
 
-def _surrogate_summary(frame: Frame) -> dict:
-    out = {"surrogate": frame.shelf.surrogate}
-    if frame.shelf.surrogate == "cake":
-        targets = cake.cake_targets(frame)
-        best = cake.get_best_kernel(frame)
-        out["kernel_targets"] = targets
-        out["best_kernels"] = best
-        out["kernel_population_size"] = sum(len(frame.shelf.kernel_populations.get(t, [])) for t in targets)
-        if frame.shelf.objectives:
-            primary = frame.shelf.objectives[0].metric
-            state = frame.shelf.kernel_evolution_states.get(primary, {})
-            out["kernel_generation"] = state.get("generation", 0)
-            out["kernel_frozen"] = state.get("frozen", False)
-            out["best_kernel"] = best.get(primary) if isinstance(best, dict) else best
+def _slot_summary(frame: Frame) -> dict:
+    out = {
+        "surrogate": frame.shelf.surrogate,
+        "region": frame.shelf.region,
+        "sampler": frame.shelf.sampler,
+        "prior": frame.shelf.prior,
+    }
+    for plugin in enabled_plugins(frame):
+        extra = plugin.summary(frame)
+        if extra:
+            out[plugin.name] = extra
     return out
 
 
@@ -273,14 +276,14 @@ def cmd_status(frame: Frame, args) -> tuple[None, dict]:
         "n_observed": len(frame.observed_trials()),
         "n_in_flight": len(frame.in_flight_trials()),
         "warmup": opt.needs_warmup(frame, encoder),
-        **_surrogate_summary(frame),
+        **_slot_summary(frame),
     }
 
 
 def cmd_diagnostics(frame: Frame, args) -> tuple[None, dict]:
     encoder = Encoder(frame.space)
     model_set = build_model_set(frame, encoder)
-    return None, {**compute_diagnostics(model_set, encoder), **_surrogate_summary(frame)}
+    return None, {**compute_diagnostics(model_set, encoder), **_slot_summary(frame)}
 
 
 def cmd_predict(frame: Frame, args) -> tuple[None, list[dict]]:

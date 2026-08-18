@@ -4,6 +4,7 @@ import torch
 from lenz.models import ModelError, build_model_set
 from lenz.space import Encoder, SearchSpace
 from lenz.state import Frame, Objective, Shelf
+from lenz import cake
 
 
 def _frame(minimize: bool) -> Frame:
@@ -114,7 +115,7 @@ def test_suggest_skips_unfittable_cake_kernels_and_uses_next_viable():
         x[1] = 2.0 + float(x[1].item()) * 2.0
         cfg = encoder.decode(x)
         frame.submit(cfg, {"y": float(x[0].item()) + cfg["batch"]}, x_gp=x.tolist())
-    frame.shelf.kernel_populations["y"] = [
+    cake.state(frame)["kernel_populations"]["y"] = [
         {"expression": "PER", "bic": float("inf"), "generation": 1},
         {"expression": "LIN", "bic": float("inf"), "generation": 1},
         {"expression": "M5", "bic": 12.0, "generation": 1},
@@ -144,7 +145,7 @@ def test_suggest_does_not_swap_in_matern_when_cake_has_no_fittable_kernel():
         x[1] = 2.0 + float(x[1].item()) * 2.0
         cfg = encoder.decode(x)
         frame.submit(cfg, {"y": 1.0}, x_gp=x.tolist())
-    frame.shelf.kernel_populations["y"] = [
+    cake.state(frame)["kernel_populations"]["y"] = [
         {"expression": "NOT_A_KERNEL", "bic": float("inf"), "generation": 1},
         {"expression": "ALSO_INVALID", "bic": float("inf"), "generation": 1},
     ]

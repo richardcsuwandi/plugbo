@@ -48,6 +48,74 @@ from .space import DTYPE, Encoder
 from .state import Frame, Objective
 
 OPERATORS = ["+", "*"]
+
+_CAKE_DEFAULTS = {
+    "kernel_llm": {},
+    "kernel_population_size": 6,
+    "kernel_init_after": 6,
+    "kernel_evolve_every": 4,
+    "kernel_freeze_fraction": 0.5,
+    "kernel_num_crossover": 1,
+    "kernel_mutation_prob": 0.7,
+    "kernel_populations": {},
+    "kernel_evolution_states": {},
+}
+
+
+def default_state() -> dict:
+    return {
+        "kernel_llm": {},
+        "kernel_population_size": 6,
+        "kernel_init_after": 6,
+        "kernel_evolve_every": 4,
+        "kernel_freeze_fraction": 0.5,
+        "kernel_num_crossover": 1,
+        "kernel_mutation_prob": 0.7,
+        "kernel_populations": {},
+        "kernel_evolution_states": {},
+    }
+
+
+def state(frame: Frame) -> dict:
+    """CAKE's namespaced blob under ``frame.plugins['cake']``."""
+    blob = frame.plugins.setdefault("cake", default_state())
+    for key, value in _CAKE_DEFAULTS.items():
+        if key not in blob:
+            blob[key] = dict(value) if isinstance(value, dict) else value
+    return blob
+
+
+def apply_kernel_args(frame: Frame, args) -> None:
+    """Writes --kernel-* / --budget flags into the CAKE blob (and shelf.budget)."""
+    import json
+
+    blob = state(frame)
+    if getattr(args, "budget", None) is not None:
+        frame.shelf.budget = args.budget
+    provider = getattr(args, "kernel_llm_provider", None)
+    model = getattr(args, "kernel_llm_model", None)
+    if provider and model:
+        extra_body = getattr(args, "kernel_llm_extra_body", None)
+        blob["kernel_llm"] = {
+            "provider": provider,
+            "model": model,
+            "base_url": getattr(args, "kernel_llm_base_url", None),
+            "api_key_env": getattr(args, "kernel_llm_api_key_env", None),
+            "extra_body": json.loads(extra_body) if extra_body else None,
+        }
+    for key in (
+        "kernel_population_size",
+        "kernel_init_after",
+        "kernel_evolve_every",
+        "kernel_freeze_fraction",
+        "kernel_num_crossover",
+        "kernel_mutation_prob",
+    ):
+        value = getattr(args, key, None)
+        if value is not None:
+            blob[key] = value
+
+
 NUM_RESTARTS = 8
 RAW_SAMPLES = 128
 MAX_KERNEL_EXPR_LENGTH = 10  # CAKE bloat-control check (paper: len(kernel) < 10)
@@ -175,7 +243,7 @@ def _prepared_populations(
     """Returns [(metric, [(expression, softmax_weight), ...]), ...] sorted by BIC."""
     out: list[tuple[str, list[tuple[str, float]]]] = []
     for target in targets:
-        population = frame.shelf.kernel_populations.get(target) or []
+        population = state(frame)["kernel_populations"].get(target) or []
         if not population:
             raise CakeNotReadyError
         y, _, _ = _metric_tensors(frame, observed, target)
@@ -233,11 +301,11 @@ def _baker_acqf_name(frame: Frame) -> str:
 
 
 def _population(frame: Frame, target: str) -> list[dict]:
-    return frame.shelf.kernel_populations.setdefault(target, [])
+    return state(frame)["kernel_populations"].setdefault(target, [])
 
 
 def _evolution_state(frame: Frame, target: str) -> dict:
-    states = frame.shelf.kernel_evolution_states
+    states = state(frame)["kernel_evolution_states"]
     if target not in states:
         states[target] = {"generation": 0, "last_evolved_at_n_observed": 0, "frozen": False}
     return states[target]
@@ -370,7 +438,7 @@ def _crossover_step(
     sys_prompt: str,
     generation: int,
 ) -> None:
-    for _ in range(frame.shelf.kernel_num_crossover):
+    for _ in range(state(frame)["kernel_num_crossover"]):
         if len(population) < 2:
             return
         viable = [m for m in population if _finite_bic(m)]
@@ -424,7 +492,7 @@ def _mutation_step(
     sys_prompt: str,
     generation: int,
 ) -> None:
-    if not population or random.random() >= frame.shelf.kernel_mutation_prob:
+    if not population or random.random() >= state(frame)["kernel_mutation_prob"]:
         return
     viable = [m for m in population if _finite_bic(m)]
     if not viable:
@@ -456,7 +524,7 @@ def _mutation_step(
 
 def _select_survivors(population: list[dict], frame: Frame) -> None:
     population.sort(key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
-    del population[frame.shelf.kernel_population_size :]
+    del population[state(frame)["kernel_population_size"] :]
 
 
 def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target: str) -> None:
@@ -468,15 +536,15 @@ def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target:
     X = encoder.stack_features(observed)
     y, _, _ = _metric_tensors(frame, observed, target)
     population = _population(frame, target)
-    state = _evolution_state(frame, target)
+    evo = _evolution_state(frame, target)
 
     if not population:
-        frame.shelf.kernel_populations[target] = [
+        state(frame)["kernel_populations"][target] = [
             {"expression": name, "bic": None, "generation": 0} for name in DEFAULT_POPULATION
         ]
         population = _population(frame, target)
 
-    generation = state.get("generation", 0) + 1
+    generation = evo.get("generation", 0) + 1
     sys_prompt = _system_prompt(X, y)
 
     _refresh_fitness(population, encoder, X, y)
@@ -485,8 +553,8 @@ def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target:
     _refresh_fitness(population, encoder, X, y)
     _select_survivors(population, frame)
 
-    state["generation"] = generation
-    state["last_evolved_at_n_observed"] = len(observed)
+    evo["generation"] = generation
+    evo["last_evolved_at_n_observed"] = len(observed)
     frame.log_event(
         "evolve-kernels",
         target=target,
@@ -499,7 +567,7 @@ def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target:
 def get_best_kernel(frame: Frame, target: str | None = None) -> str | None | dict[str, str | None]:
     if target is None:
         return {t: get_best_kernel(frame, t) for t in cake_targets(frame)}
-    population = frame.shelf.kernel_populations.get(target) or []
+    population = state(frame)["kernel_populations"].get(target) or []
     viable = [m for m in population if _finite_bic(m)]
     if not viable:
         return None
@@ -510,7 +578,7 @@ def covar_module_for_metric(frame: Frame, d: int, metric: str):
     """Best-BIC kernel expression for `metric`, or None if unavailable."""
     if frame.shelf.surrogate != "cake":
         return None
-    population = frame.shelf.kernel_populations.get(metric) or []
+    population = state(frame)["kernel_populations"].get(metric) or []
     viable = [m for m in population if _finite_bic(m)]
     if not viable:
         return None
@@ -530,22 +598,23 @@ def should_evolve(frame: Frame, target: str) -> bool:
     """
     if frame.shelf.surrogate != "cake":
         return False
-    state = _evolution_state(frame, target)
-    if state.get("frozen"):
+    evo = _evolution_state(frame, target)
+    if evo.get("frozen"):
         return False
 
     n_observed = len(frame.observed_trials())
     budget = frame.shelf.budget
-    if budget and n_observed >= budget * frame.shelf.kernel_freeze_fraction:
-        state["frozen"] = True  # freeze from here on; population is kept, just no more LLM calls
+    blob = state(frame)
+    if budget and n_observed >= budget * blob["kernel_freeze_fraction"]:
+        evo["frozen"] = True  # freeze from here on; population is kept, just no more LLM calls
         return False
 
-    population = frame.shelf.kernel_populations.get(target) or []
+    population = blob["kernel_populations"].get(target) or []
     if not population:
-        return n_observed >= frame.shelf.kernel_init_after
+        return n_observed >= blob["kernel_init_after"]
 
-    last = state.get("last_evolved_at_n_observed", 0)
-    return n_observed - last >= frame.shelf.kernel_evolve_every
+    last = evo.get("last_evolved_at_n_observed", 0)
+    return n_observed - last >= blob["kernel_evolve_every"]
 
 
 def maybe_evolve(frame: Frame, encoder: Encoder, force: bool = False) -> bool:
@@ -558,7 +627,7 @@ def maybe_evolve(frame: Frame, encoder: Encoder, force: bool = False) -> bool:
     if len(frame.observed_trials()) < 2:
         return False
 
-    llm_cfg = frame.shelf.kernel_llm
+    llm_cfg = state(frame)["kernel_llm"]
     provider, model = llm_cfg.get("provider"), llm_cfg.get("model")
     if not provider or not model:
         frame.log_event("evolve-kernels", status="skipped", reason="kernel_llm not configured")

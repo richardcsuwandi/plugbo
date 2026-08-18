@@ -888,16 +888,17 @@ function renderConfig(detail) {
 
   let kernelSection = "";
   if (shelf.surrogate === "cake") {
-    const kl = shelf.kernel_llm || {};
+    const cake = (detail.state.plugins && detail.state.plugins.cake) || shelf;
+    const kl = cake.kernel_llm || {};
     kernelSection = `
       <div class="subhead">CAKE kernel evolution</div>
       <table class="kv-table">
         <tr><td>LLM provider</td><td class="mono">${escapeHtml(kl.provider || "—")}</td></tr>
         <tr><td>LLM model</td><td class="mono">${escapeHtml(kl.model || "—")}</td></tr>
-        <tr><td>Population size</td><td>${shelf.kernel_population_size}</td></tr>
-        <tr><td>Init after</td><td>${shelf.kernel_init_after} observations</td></tr>
-        <tr><td>Evolve every</td><td>${shelf.kernel_evolve_every} observations</td></tr>
-        <tr><td>Freeze fraction</td><td>${shelf.kernel_freeze_fraction}</td></tr>
+        <tr><td>Population size</td><td>${cake.kernel_population_size}</td></tr>
+        <tr><td>Init after</td><td>${cake.kernel_init_after} observations</td></tr>
+        <tr><td>Evolve every</td><td>${cake.kernel_evolve_every} observations</td></tr>
+        <tr><td>Freeze fraction</td><td>${cake.kernel_freeze_fraction}</td></tr>
       </table>`;
   }
 
@@ -1394,9 +1395,10 @@ function renderToolUse(detail) {
 
 function renderKernels(detail) {
   const panel = document.getElementById("panel-kernels");
-  const shelf = detail.state.shelf;
-  const populations = shelf.kernel_populations || {};
-  const legacy = shelf.kernel_population || [];
+  const shelf = detail.state.shelf || {};
+  const cake = (detail.state.plugins && detail.state.plugins.cake) || shelf;
+  const populations = cake.kernel_populations || {};
+  const legacy = cake.kernel_population || shelf.kernel_population || [];
   const targets = Object.keys(populations).length
     ? Object.keys(populations)
     : legacy.length
@@ -1408,7 +1410,7 @@ function renderKernels(detail) {
       (a, b) => (a.bic ?? Infinity) - (b.bic ?? Infinity)
     );
     const bestExpr = population.length ? population[0].expression : null;
-    const state = shelf.kernel_evolution_states?.[target] || shelf.kernel_evolution_state || {};
+    const state = cake.kernel_evolution_states?.[target] || cake.kernel_evolution_state || {};
     const rows = population
       .map(
         (m) => `<tr>
