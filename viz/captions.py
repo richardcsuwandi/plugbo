@@ -67,6 +67,10 @@ _LAYOUTS: list[tuple[str, str]] = [
         "Generic context (names and types kept, no LoRA story): compare conditions on {bench}.",
     ),
     (
+        "-domain",
+        "Domain LoRA/Qwen context (real names, no textbook optimum): compare conditions on {bench}.",
+    ),
+    (
         "-misleading",
         "Misleading LoRA folklore in context.md: compare conditions on {bench}.",
     ),
@@ -146,6 +150,11 @@ BACKEND_LABELS = {
     "vanilla": "Vanilla",
     "cake": "CAKE",
     "turbo": "TuRBO",
+    "pibo": "πBO",
+    "llambo": "LLAMBO",
+    "cake-turbo": "CAKE+TuRBO",
+    "cake-turbo-pibo": "CAKE+TuRBO+πBO",
+    "cake-turbo-llambo": "CAKE+TuRBO+LLAMBO",
     "sara-lenz": "Sara+lenz",
     "sara-cake": "Sara+CAKE",
     "sara-only": "Sara-only",
@@ -161,6 +170,11 @@ _CONDITION_BACKEND = {
     "vanilla": "vanilla",
     "cake": "cake",
     "turbo": "turbo",
+    "pibo": "pibo",
+    "llambo": "llambo",
+    "cake-turbo": "cake-turbo",
+    "cake-turbo-pibo": "cake-turbo-pibo",
+    "cake-turbo-llambo": "cake-turbo-llambo",
     "sara-lenz": "sara-lenz",
     "sara-lenz-cake": "sara-cake",
     "sara-only": "sara-only",
@@ -218,6 +232,10 @@ def parse_group_leaf(leaf: str) -> dict:
                 out["axis"] = "backend"
                 out["disclosure"] = "revealed"
                 out["context"] = "generic"
+            elif suffix == "-domain":
+                out["axis"] = "backend"
+                out["disclosure"] = "revealed"
+                out["context"] = "domain"
             elif suffix in ("-misleading-compare", "-misleading"):
                 out["axis"] = "backend"
                 out["disclosure"] = "revealed"

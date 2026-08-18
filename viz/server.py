@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from benchmarks.plot_all import find_groups
-from benchmarks.plot_compare import collect_traces, condition_summary, is_scorable
+from benchmarks.plot_compare import _pick_state, collect_traces, condition_summary, is_scorable
 
 from .captions import classify_group, classify_relpath, experiment_caption
 
@@ -49,7 +49,12 @@ def _started_at_epoch(run_dir: Path, state: dict, meta: dict | None) -> float | 
         parsed = _parse_iso(meta["started_at"])
         if parsed is not None:
             return parsed
-    times = [t.get("created_at") for t in state.get("trials", []) if t.get("created_at")]
+    trials = state.get("trials") or []
+    times = [
+        t.get("created_at")
+        for t in trials
+        if isinstance(t, dict) and t.get("created_at")
+    ]
     if times:
         return min(times)
     state_path = run_dir / "state.json"
@@ -98,9 +103,7 @@ def find_runs(root: Path) -> list[dict]:
     root = root.resolve()
     if not root.exists():
         return []
-    state_paths = list(root.glob("*/state.json")) + list(root.glob("*/*/state.json")) + list(
-        root.glob("*/*/*/state.json")
-    )
+    state_paths = list(root.rglob("state.json"))
     runs = []
     seen = set()
     for state_path in sorted(state_paths):
@@ -111,39 +114,41 @@ def find_runs(root: Path) -> list[dict]:
         seen.add(rel)
         try:
             state = json.loads(state_path.read_text())
-        except (json.JSONDecodeError, OSError):
+            meta = _load_meta(run_dir)
+            has_trace = (run_dir / "trace.jsonl").exists()
+            trials = state.get("trials") or []
+            n_observed = sum(1 for t in trials if isinstance(t, dict) and t.get("status") == "observed")
+            tax = classify_relpath(rel)
+            shelf = state.get("shelf") if isinstance(state.get("shelf"), dict) else {}
+            objectives = shelf.get("objectives") or []
+            runs.append(
+                {
+                    "name": rel,
+                    "n_trials": len(trials),
+                    "n_observed": n_observed,
+                    "surrogate": shelf.get("surrogate", "fixed"),
+                    "is_moo": len(objectives) > 1,
+                    "has_trace": has_trace,
+                    "run_kind": _run_kind(meta, has_trace),
+                    "provider": meta.get("provider") if meta else None,
+                    "model": meta.get("model") if meta else None,
+                    "status": meta.get("status") if meta else ("completed" if trials else "empty"),
+                    "started_at": (meta.get("started_at") if meta else None)
+                    or _epoch_to_iso(_started_at_epoch(run_dir, state, meta)),
+                    "group": tax["group"],
+                    "condition": tax["condition"],
+                    "benchmark": tax["benchmark"],
+                    "benchmark_label": tax["benchmark_label"],
+                    "backend": tax["backend"],
+                    "backend_label": tax["backend_label"],
+                    "disclosure": tax["disclosure"],
+                    "disclosure_label": tax["disclosure_label"],
+                    "heading": tax["heading"],
+                    "_sort_key": _started_at_epoch(run_dir, state, meta) or 0,
+                }
+            )
+        except Exception:
             continue
-        meta = _load_meta(run_dir)
-        has_trace = (run_dir / "trace.jsonl").exists()
-        trials = state.get("trials", [])
-        n_observed = sum(1 for t in trials if t.get("status") == "observed")
-        tax = classify_relpath(rel)
-        runs.append(
-            {
-                "name": rel,
-                "n_trials": len(trials),
-                "n_observed": n_observed,
-                "surrogate": state.get("shelf", {}).get("surrogate", "fixed"),
-                "is_moo": len(state.get("shelf", {}).get("objectives", [])) > 1,
-                "has_trace": has_trace,
-                "run_kind": _run_kind(meta, has_trace),
-                "provider": meta.get("provider") if meta else None,
-                "model": meta.get("model") if meta else None,
-                "status": meta.get("status") if meta else ("completed" if trials else "empty"),
-                "started_at": (meta.get("started_at") if meta else None)
-                or _epoch_to_iso(_started_at_epoch(run_dir, state, meta)),
-                "group": tax["group"],
-                "condition": tax["condition"],
-                "benchmark": tax["benchmark"],
-                "benchmark_label": tax["benchmark_label"],
-                "backend": tax["backend"],
-                "backend_label": tax["backend_label"],
-                "disclosure": tax["disclosure"],
-                "disclosure_label": tax["disclosure_label"],
-                "heading": tax["heading"],
-                "_sort_key": _started_at_epoch(run_dir, state, meta) or 0,
-            }
-        )
     runs.sort(key=lambda r: r["_sort_key"], reverse=True)
     for r in runs:
         del r["_sort_key"]
@@ -411,7 +416,11 @@ def compare_group_detail(root: Path, name: str) -> dict | None:
     for condition_dir in sorted(p for p in group_dir.iterdir() if p.is_dir()):
         summary = condition_summary(condition_dir)
         if summary:
-            conditions.append({k: v for k, v in summary.items() if k != "trace"})
+            item = {k: v for k, v in summary.items() if k != "trace"}
+            state_path = _pick_state(condition_dir)
+            if state_path is not None:
+                item["run_name"] = state_path.parent.relative_to(root).as_posix()
+            conditions.append(item)
     return {
         "name": name,
         "title": name.replace("/", " / "),
@@ -470,7 +479,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler API
         path = urlparse(self.path).path
         if path == "/api/runs":
-            self._send_json(find_runs(self.root))
+            try:
+                self._send_json(find_runs(self.root))
+            except Exception as exc:
+                self._send_json({"error": f"failed to list runs: {exc}"}, status=500)
         elif path == "/api/compare-groups":
             self._send_json(find_compare_groups(self.root))
         elif path.startswith("/api/compare-groups/"):

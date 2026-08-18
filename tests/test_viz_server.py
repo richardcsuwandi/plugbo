@@ -47,6 +47,38 @@ def test_find_runs_discovers_nested_state_files(tmp_path):
     assert names == {"run1", "nested/run2"}
 
 
+def test_find_runs_discovers_plugin_matrix_sandboxes(tmp_path):
+    run_dir = tmp_path / "plugin-matrix" / "bolt_lora-domain" / "pibo" / "sandbox_abc"
+    run_dir.mkdir(parents=True)
+    _write_state(run_dir / "state.json", [{"metric": "y", "minimize": False}], [])
+
+    runs = find_runs(tmp_path)
+
+    assert [run["name"] for run in runs] == [
+        "plugin-matrix/bolt_lora-domain/pibo/sandbox_abc"
+    ]
+    assert runs[0]["benchmark"] == "bolt_lora"
+    assert runs[0]["backend"] == "pibo"
+    assert runs[0]["backend_label"] == "πBO"
+    assert runs[0]["disclosure"] == "revealed"
+    assert "domain" in runs[0]["heading"]
+
+
+def test_find_runs_skips_unreadable_state_without_dropping_siblings(tmp_path):
+    good = tmp_path / "plugin-matrix" / "bolt_lora-domain" / "pibo" / "sandbox_good"
+    bad = tmp_path / "hartmann6-compare" / "vanilla" / "sandbox_bad"
+    good.mkdir(parents=True)
+    bad.mkdir(parents=True)
+    _write_state(good / "state.json", [{"metric": "y", "minimize": False}], [])
+    (bad / "state.json").write_bytes(b"\xff\xfe not json")
+
+    runs = find_runs(tmp_path)
+
+    assert [run["name"] for run in runs] == [
+        "plugin-matrix/bolt_lora-domain/pibo/sandbox_good"
+    ]
+
+
 def test_find_runs_empty_root(tmp_path):
     assert find_runs(tmp_path / "does-not-exist") == []
 

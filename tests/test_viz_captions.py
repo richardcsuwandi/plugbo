@@ -82,3 +82,18 @@ def test_classify_bolt_lora_followup_groups():
     assert "seed 7" in s["heading"]
     assert "generic context" in experiment_caption("bolt_lora-generic-compare").lower()
     assert "seed 13" in experiment_caption("bolt_lora-seed13-compare")
+
+
+def test_classify_plugin_matrix_pibo_domain():
+    tax = classify_relpath("plugin-matrix/bolt_lora-domain/pibo/sandbox_abc")
+    assert tax["group"] == "plugin-matrix/bolt_lora-domain"
+    assert tax["condition"] == "pibo"
+    assert tax["benchmark"] == "bolt_lora"
+    assert tax["backend"] == "pibo"
+    assert tax["backend_label"] == "πBO"
+    assert tax["disclosure"] == "revealed"
+    assert "domain" in tax["heading"]
+    g = classify_group("plugin-matrix/bolt_lora-domain")
+    assert g["benchmark"] == "bolt_lora"
+    assert g["heading"] == "BOLT LoRA HPO · domain context"
+    assert "Domain LoRA" in experiment_caption("plugin-matrix/bolt_lora-domain")

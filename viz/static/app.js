@@ -22,6 +22,11 @@ const CAT_COLORS = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--ca
 const BACKEND_COLORS = {
   vanilla: "--cat-4",
   cake: "--cat-1",
+  turbo: "--cat-6",
+  pibo: "--cat-2",
+  llambo: "--cat-8",
+  "cake-turbo": "--cat-1",
+  "cake-turbo-pibo": "--cat-2",
   "sara-lenz": "--cat-3",
   "sara-lenz-cake": "--cat-7",
   "sara-cake": "--cat-7",
@@ -516,8 +521,16 @@ function applySidebarModeUI(mode) {
   document.querySelectorAll(".sidebar-nav-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.sidebar === mode);
   });
-  document.getElementById("runs-sidebar").style.display = mode === "runs" ? "block" : "none";
-  document.getElementById("experiments-sidebar").style.display = mode === "experiments" ? "block" : "none";
+  document.getElementById("runs-sidebar").classList.toggle("is-hidden", mode !== "runs");
+  document.getElementById("experiments-sidebar").classList.toggle("is-hidden", mode !== "experiments");
+}
+
+function runNameForCurrentExperiment() {
+  const fromDetail = (state.groupDetail?.conditions || []).map((c) => c.run_name).find(Boolean);
+  if (fromDetail) return fromDetail;
+  if (!state.currentGroup) return null;
+  const match = state.runs.find((r) => r.group === state.currentGroup);
+  return match ? match.name : null;
 }
 
 function setSidebarMode(mode) {
@@ -526,9 +539,16 @@ function setSidebarMode(mode) {
   renderFilterBar();
   if (mode === "experiments") {
     openExperimentsView();
-  } else if (state.mode === "experiment") {
-    showEmptyMain();
+    return;
   }
+  loadRuns().then(() => {
+    const runName = runNameForCurrentExperiment();
+    if (runName && state.runs.some((r) => r.name === runName)) {
+      selectRun(runName);
+      return;
+    }
+    if (state.mode === "experiment") showEmptyMain();
+  });
 }
 
 async function selectCompareGroup(name) {
@@ -556,8 +576,15 @@ async function selectCompareGroup(name) {
 }
 
 async function loadRuns() {
-  const res = await fetch("/api/runs");
-  state.runs = await res.json();
+  try {
+    const res = await fetch("/api/runs");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    state.runs = Array.isArray(payload) ? payload : [];
+  } catch (err) {
+    console.error(err);
+    if (!Array.isArray(state.runs)) state.runs = [];
+  }
   renderFilterBar();
   renderSidebar();
 }
@@ -1707,8 +1734,12 @@ function renderExperimentCompare(detail) {
     .map((c) => {
       const evals =
         c.budget != null ? `${c.n_evals}/${c.budget}` : String(c.n_evals);
+      const label = `<span class="run-dot" style="background:${colorOf(c.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(c.name)}`;
+      const nameCell = c.run_name
+        ? `<button type="button" class="condition-link" data-run="${escapeHtml(c.run_name)}">${label}</button>`
+        : label;
       return `<tr>
-        <td><span class="run-dot" style="background:${colorOf(c.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(c.name)}</td>
+        <td>${nameCell}</td>
         <td class="mono">${fmtNum(c.regret_eval1, 4)}</td>
         <td class="mono">${fmtNum(c.best_regret, 6)}</td>
         <td>${escapeHtml(evals)}</td>
@@ -1750,6 +1781,9 @@ function renderExperimentCompare(detail) {
   `;
 
   document.getElementById("refresh-group-btn")?.addEventListener("click", () => selectCompareGroup(detail.name));
+  view.querySelectorAll(".condition-link").forEach((btn) => {
+    btn.addEventListener("click", () => selectRun(btn.dataset.run));
+  });
 
   if (conditions.length) renderRegretChart(document.getElementById("regret-chart-wrap"), traces, colorOf);
 }
@@ -1760,7 +1794,7 @@ initTheme();
 initSearchAndCompare();
 initSidebarNav();
 renderGroupPicker();
-Promise.all([loadRuns(), loadCompareGroups()]).then(() => {
+Promise.allSettled([loadRuns(), loadCompareGroups()]).then(() => {
   readFiltersFromUrl();
   applyFilters();
   const params = new URLSearchParams(location.search);
