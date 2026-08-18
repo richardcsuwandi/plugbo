@@ -1,4 +1,5 @@
 import pytest
+import torch
 
 from lenz.space import Encoder, RangeDim, SearchSpace, SpaceError
 
@@ -54,6 +55,25 @@ def test_bounds_subset_validation():
     assert ok[0, 0].item() == pytest.approx(0.2)
     with pytest.raises(SpaceError):
         enc.encode_bounds({"x": [-0.5, 0.8]})
+
+
+def test_features_from_prefers_continuous_x_gp():
+    space = SearchSpace.from_json(
+        {
+            "n": {"kind": "range", "lower": 1, "upper": 8, "type": "int"},
+            "color": {"kind": "choice", "values": ["red", "green", "blue"]},
+        }
+    )
+    enc = Encoder(space)
+    x_gp = [3.4, 0.2, 0.7, 0.1]
+    cfg = enc.decode(torch.tensor(x_gp, dtype=torch.double))
+    assert cfg["n"] == 3
+    assert cfg["color"] == "green"
+    feats = enc.features_from(cfg, x_gp)
+    assert feats.tolist() == pytest.approx(x_gp)
+    encoded = enc.encode(cfg)
+    assert encoded[0].item() == pytest.approx(3.0)
+    assert encoded[1:].tolist() == pytest.approx([0.0, 1.0, 0.0])
 
 
 def test_radius_bounds_pins_choice_and_fixes_range():

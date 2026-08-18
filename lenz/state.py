@@ -28,6 +28,9 @@ class Trial:
     status: str = "in_flight"  # "in_flight" | "observed"
     created_at: float = field(default_factory=time.time)
     observed_at: float | None = None
+    # Continuous GP-space proposal before int rounding / one-hot argmax.
+    # The oracle sees `config` (the projection); the surrogate fits on `x_gp`.
+    x_gp: list[float] | None = None
 
 
 @dataclass
@@ -83,6 +86,10 @@ class Frame:
     shelf: Shelf
     trials: list[Trial] = field(default_factory=list)
     events: list[dict] = field(default_factory=list)
+    # Latest `suggest` batch: projected config -> continuous proposal, so a
+    # later `submit --config` (Sara, harness) can recover `x_gp` without the
+    # caller having to pass it.
+    pending_x_gp: list[dict] = field(default_factory=list)
 
     # -- trial log helpers -------------------------------------------------
     def observed_trials(self) -> list[Trial]:
@@ -97,9 +104,13 @@ class Frame:
                 return t
         return None
 
-    def submit(self, config: dict, metrics: dict | None = None) -> Trial:
+    def submit(self, config: dict, metrics: dict | None = None, x_gp: list[float] | None = None) -> Trial:
         self.space.validate_config_keys(config)
-        trial = Trial(trial_id=str(uuid.uuid4())[:8], config=config)
+        if metrics is not None:
+            self._check_budget()
+        if x_gp is None:
+            x_gp = self.take_suggestion_x_gp(config)
+        trial = Trial(trial_id=str(uuid.uuid4())[:8], config=config, x_gp=x_gp)
         if metrics is not None:
             trial.metrics = metrics
             trial.status = "observed"
@@ -107,14 +118,46 @@ class Frame:
         self.trials.append(trial)
         return trial
 
+    def remember_suggestion(self, config: dict, x_gp: list[float] | None) -> None:
+        if x_gp is None:
+            return
+        self.pending_x_gp.append({"config": config, "x_gp": [float(v) for v in x_gp]})
+
+    def clear_pending_x_gp(self) -> None:
+        self.pending_x_gp = []
+
+    def take_suggestion_x_gp(self, config: dict) -> list[float] | None:
+        for i, item in enumerate(self.pending_x_gp):
+            if configs_match(item["config"], config):
+                return self.pending_x_gp.pop(i)["x_gp"]
+        return None
+
     def observe(self, config: dict, metrics: dict) -> Trial | None:
         trial = self.find_in_flight(config)
         if trial is None:
             return None
+        self._check_budget()
         trial.metrics = metrics
         trial.status = "observed"
         trial.observed_at = time.time()
         return trial
+
+    def _check_budget(self) -> None:
+        """Hard cap: once `shelf.budget` observed trials are recorded, refuse
+        to record any more (raised as a normal StateError so the CLI reports
+        it as `{"ok": false, ...}` instead of crashing the caller). `budget`
+        is None unless `lenz create --budget N` was passed, so this is a
+        no-op for callers that never opted in (examples, ad-hoc CLI use).
+        """
+        budget = self.shelf.budget
+        if budget is None:
+            return
+        n_observed = len(self.observed_trials())
+        if n_observed >= budget:
+            raise StateError(
+                f"evaluation budget exhausted ({n_observed}/{budget} observed) -- "
+                "no further evaluations may be recorded; report your final incumbent and stop"
+            )
 
     def log_event(self, command: str, **kwargs: Any) -> None:
         self.events.append({"ts": time.time(), "command": command, **kwargs})
@@ -147,6 +190,7 @@ class Frame:
             },
             "trials": [asdict(t) for t in self.trials],
             "events": self.events,
+            "pending_x_gp": self.pending_x_gp,
         }
 
     def save(self, path: str) -> None:
@@ -189,8 +233,18 @@ class Frame:
             kernel_populations=kernel_populations,
             kernel_evolution_states=kernel_evolution_states,
         )
-        trials = [Trial(**t) for t in obj.get("trials", [])]
-        return cls(space=space, shelf=shelf, trials=trials, events=obj.get("events", []))
+        trials = []
+        for t in obj.get("trials", []):
+            row = dict(t)
+            row.setdefault("x_gp", None)
+            trials.append(Trial(**row))
+        return cls(
+            space=space,
+            shelf=shelf,
+            trials=trials,
+            events=obj.get("events", []),
+            pending_x_gp=list(obj.get("pending_x_gp") or []),
+        )
 
 
 def configs_match(a: dict, b: dict) -> bool:

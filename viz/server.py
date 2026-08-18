@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 from benchmarks.plot_all import find_groups
 from benchmarks.plot_compare import collect_traces, condition_summary, is_scorable
 
-from .captions import experiment_caption
+from .captions import classify_group, classify_relpath, experiment_caption
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -33,12 +33,14 @@ def _load_meta(run_dir: Path) -> dict | None:
         return None
 
 
-def _parse_iso(ts: str | None) -> float | None:
-    if not ts:
+def _parse_iso(ts: str | float | int | None) -> float | None:
+    if ts is None or ts == "":
         return None
+    if isinstance(ts, (int, float)):
+        return float(ts)
     try:
-        return datetime.fromisoformat(ts).timestamp()
-    except ValueError:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
         return None
 
 
@@ -84,8 +86,11 @@ def _run_kind(meta: dict | None, has_trace: bool) -> str:
     BO writes neither. An explicit meta['kind'] wins so a lenz baseline can
     still record timestamps without being mislabeled as an agent run.
     """
-    if meta and meta.get("kind") in ("sara", "lenz"):
-        return meta["kind"]
+    kind = (meta or {}).get("kind")
+    if kind in ("sara", "sara-only", "sara-noblind"):
+        return "sara"
+    if kind == "lenz":
+        return "lenz"
     return "sara" if (meta is not None or has_trace) else "lenz"
 
 
@@ -112,6 +117,7 @@ def find_runs(root: Path) -> list[dict]:
         has_trace = (run_dir / "trace.jsonl").exists()
         trials = state.get("trials", [])
         n_observed = sum(1 for t in trials if t.get("status") == "observed")
+        tax = classify_relpath(rel)
         runs.append(
             {
                 "name": rel,
@@ -126,6 +132,15 @@ def find_runs(root: Path) -> list[dict]:
                 "status": meta.get("status") if meta else ("completed" if trials else "empty"),
                 "started_at": (meta.get("started_at") if meta else None)
                 or _epoch_to_iso(_started_at_epoch(run_dir, state, meta)),
+                "group": tax["group"],
+                "condition": tax["condition"],
+                "benchmark": tax["benchmark"],
+                "benchmark_label": tax["benchmark_label"],
+                "backend": tax["backend"],
+                "backend_label": tax["backend_label"],
+                "disclosure": tax["disclosure"],
+                "disclosure_label": tax["disclosure_label"],
+                "heading": tax["heading"],
                 "_sort_key": _started_at_epoch(run_dir, state, meta) or 0,
             }
         )
@@ -287,6 +302,30 @@ def run_detail(root: Path, name: str) -> dict | None:
     }
 
 
+def _sandbox_started_at(sandbox_dir: Path) -> float | None:
+    """Same timestamp fallback as a single run: meta, then trials, then mtime."""
+    meta = _load_meta(sandbox_dir)
+    state: dict = {}
+    state_path = sandbox_dir / "state.json"
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            state = {}
+    return _started_at_epoch(sandbox_dir, state, meta)
+
+
+def _group_started_at(child_dirs: list[Path]) -> float | None:
+    keys = []
+    for child in child_dirs:
+        for sandbox in child.glob("sandbox_*"):
+            if sandbox.is_dir():
+                started = _sandbox_started_at(sandbox)
+                if started is not None:
+                    keys.append(started)
+    return max(keys) if keys else None
+
+
 def find_compare_groups(root: Path) -> list[dict]:
     """Comparison groups: dirs whose children each hold sandbox_*/state.json."""
     root = root.resolve()
@@ -294,13 +333,45 @@ def find_compare_groups(root: Path) -> list[dict]:
     for g in find_groups(root):
         rel = g.relative_to(root).as_posix()
         child_dirs = [c for c in g.iterdir() if c.is_dir() and any(c.glob("sandbox_*"))]
+        tax = classify_group(rel)
+        backends: set[str] = set()
+        disclosures: set[str] = set()
+        statuses: set[str] = set()
+        if tax["backend"]:
+            backends.add(tax["backend"])
+        if tax["disclosure"]:
+            disclosures.add(tax["disclosure"])
+        for child in child_dirs:
+            child_tax = classify_relpath(f"{rel}/{child.name}")
+            if child_tax["backend"]:
+                backends.add(child_tax["backend"])
+            if child_tax["disclosure"]:
+                disclosures.add(child_tax["disclosure"])
+            metas = list(child.glob("sandbox_*/run_meta.json"))
+            if metas:
+                latest = max(metas, key=lambda p: p.stat().st_mtime)
+                try:
+                    meta = json.loads(latest.read_text())
+                except (json.JSONDecodeError, OSError):
+                    meta = {}
+                statuses.add(meta.get("status") or "completed")
+            else:
+                statuses.add("completed")
         groups.append(
             {
                 "name": rel,
                 "title": rel.replace("/", " / "),
+                "heading": tax["heading"],
                 "caption": experiment_caption(rel),
                 "n_conditions": len(child_dirs),
                 "n_scored": sum(1 for c in child_dirs if is_scorable(c)),
+                "benchmark": tax["benchmark"],
+                "benchmark_label": tax["benchmark_label"],
+                "axis": tax["axis"],
+                "backends": sorted(backends),
+                "disclosures": sorted(disclosures),
+                "statuses": sorted(statuses),
+                "started_at": _epoch_to_iso(_group_started_at(child_dirs)),
             }
         )
     groups.sort(key=lambda x: x["name"])
@@ -369,6 +440,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

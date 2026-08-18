@@ -32,6 +32,25 @@ def active_bounds(frame: Frame, encoder: Encoder) -> torch.Tensor:
     return encoder.encode_bounds(frame.shelf.bounds)
 
 
+def _sobol_x(
+    encoder: Encoder, bounds: torch.Tensor, q: int, seed: int | None = None, skip: int = 0
+) -> tuple[torch.Tensor, int]:
+    """Continuous GP-space Sobol draws. Projection onto mixed types happens in `decode`."""
+    d = int(bounds.shape[-1])
+    if seed is None:
+        samples = draw_sobol_samples(bounds=bounds, n=1, q=q).squeeze(0)
+        if samples.ndim == 1:
+            samples = samples.unsqueeze(0)
+        return samples, skip + q
+    engine = torch.quasirandom.SobolEngine(dimension=d, scramble=True, seed=int(seed))
+    if skip:
+        engine.fast_forward(skip)
+    unit = engine.draw(q).to(dtype=bounds.dtype)
+    lo, hi = bounds[0], bounds[1]
+    samples = lo + (hi - lo) * unit
+    return samples, skip + q
+
+
 def sobol_candidates(
     encoder: Encoder, bounds: torch.Tensor, q: int, seed: int | None = None, skip: int = 0
 ) -> tuple[list[dict], int]:
@@ -39,26 +58,64 @@ def sobol_candidates(
     Sobol sequence that continues from `skip`, so sequential q=1 calls match
     a single q=n call. Unseeded draws stay independently scrambled (old behavior).
     """
-    d = int(bounds.shape[-1])
-    if seed is None:
-        samples = draw_sobol_samples(bounds=bounds, n=1, q=q).squeeze(0)
-        if samples.ndim == 1:
-            samples = samples.unsqueeze(0)
-        return [encoder.decode(samples[i]) for i in range(q)], skip + q
-    engine = torch.quasirandom.SobolEngine(dimension=d, scramble=True, seed=int(seed))
-    if skip:
-        engine.fast_forward(skip)
-    unit = engine.draw(q).to(dtype=bounds.dtype)
-    lo, hi = bounds[0], bounds[1]
-    samples = lo + (hi - lo) * unit
-    return [encoder.decode(samples[i]) for i in range(q)], skip + q
+    samples, new_skip = _sobol_x(encoder, bounds, q, seed=seed, skip=skip)
+    return [encoder.decode(samples[i]) for i in range(q)], new_skip
 
 
 def _pending_X(frame: Frame, encoder: Encoder) -> torch.Tensor | None:
     pending = frame.in_flight_trials()
     if not pending:
         return None
-    return torch.stack([encoder.encode(t.config) for t in pending])
+    return encoder.stack_features(pending)
+
+
+def _pack_suggestions(
+    encoder: Encoder,
+    X: torch.Tensor,
+    *,
+    acqf_name: str,
+    acquisition_values: list[dict] | None = None,
+) -> list[dict]:
+    out = []
+    for i in range(X.shape[0]):
+        xi = X[i]
+        payload = {
+            "config": encoder.decode(xi),
+            "x_gp": xi.detach().tolist(),
+            "acquisition_values": {} if acquisition_values is None else acquisition_values[i],
+            "trial_id": None,
+            "acqf": acqf_name,
+        }
+        out.append(payload)
+    return out
+
+
+def _sobol_suggestions(frame: Frame, encoder: Encoder, bounds: torch.Tensor, q: int) -> list[dict]:
+    samples, drawn = _sobol_x(encoder, bounds, q, seed=frame.shelf.seed, skip=frame.shelf.sobol_drawn)
+    frame.shelf.sobol_drawn = drawn
+    return _pack_suggestions(encoder, samples, acqf_name="sobol")
+
+
+def _cake_population_all_unfittable(frame: Frame) -> bool:
+    """True when CAKE has a population but every member has a non-finite BIC.
+
+    In that case we must not silently swap in the default Matérn: that would
+    make the cake surrogate a no-op. Suggest falls back to Sobol for the step.
+    """
+    if frame.shelf.surrogate != "cake":
+        return False
+    targets = cake_module.cake_targets(frame)
+    if not targets:
+        return False
+    any_pop = False
+    for target in targets:
+        pop = frame.shelf.kernel_populations.get(target) or []
+        if not pop:
+            continue
+        any_pop = True
+        if cake_module.get_best_kernel(frame, target) is not None:
+            return False
+    return any_pop
 
 
 def _eval_acqf(acqf, x: torch.Tensor) -> float:
@@ -102,6 +159,13 @@ def get_pareto(frame: Frame) -> list[Trial]:
     return [t for t, keep in zip(feasible, mask.tolist()) if keep]
 
 
+def _commit_suggestions(frame: Frame, suggestions: list[dict]) -> list[dict]:
+    frame.clear_pending_x_gp()
+    for item in suggestions:
+        frame.remember_suggestion(item["config"], item.get("x_gp"))
+    return suggestions
+
+
 def suggest(
     frame: Frame,
     encoder: Encoder,
@@ -129,18 +193,14 @@ def suggest(
     plain_call = bounds_override is None and around is None
     if plain_call and cake_module.can_use_baker(frame) and not needs_warmup(frame, encoder):
         try:
-            return cake_module.baker_suggest(frame, encoder, q, _pending_X(frame, encoder))
+            return _commit_suggestions(
+                frame, cake_module.baker_suggest(frame, encoder, q, _pending_X(frame, encoder))
+            )
         except cake_module.CakeNotReadyError:
             pass  # populations not ready -- fall back to best kernel per metric below
 
-    if frame.shelf.acqf == "sobol" or needs_warmup(frame, encoder):
-        configs, drawn = sobol_candidates(
-            encoder, bounds, q, seed=frame.shelf.seed, skip=frame.shelf.sobol_drawn
-        )
-        frame.shelf.sobol_drawn = drawn
-        return [
-            {"config": c, "acquisition_values": {}, "trial_id": None, "acqf": "sobol"} for c in configs
-        ]
+    if frame.shelf.acqf == "sobol" or needs_warmup(frame, encoder) or _cake_population_all_unfittable(frame):
+        return _commit_suggestions(frame, _sobol_suggestions(frame, encoder, bounds, q))
 
     model_set = build_model_set(frame, encoder)
     X_pending = _pending_X(frame, encoder)
@@ -165,19 +225,11 @@ def suggest(
             acq_function=acqf, bounds=bounds, q=q, num_restarts=NUM_RESTARTS, raw_samples=RAW_SAMPLES
         )
 
-    out = []
-    for i in range(q):
-        xi = X[i]
-        val = _eval_acqf(acqf, xi)
-        out.append(
-            {
-                "config": encoder.decode(xi),
-                "acquisition_values": {name: val},
-                "trial_id": None,
-                "acqf": name,
-            }
-        )
-    return out
+    vals = [_eval_acqf(acqf, X[i]) for i in range(q)]
+    return _commit_suggestions(
+        frame,
+        _pack_suggestions(encoder, X, acqf_name=name, acquisition_values=[{name: v} for v in vals]),
+    )
 
 
 def score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[str]) -> list[dict]:

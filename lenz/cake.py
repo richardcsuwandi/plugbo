@@ -180,11 +180,11 @@ def _prepared_populations(
             raise CakeNotReadyError
         y, _, _ = _metric_tensors(frame, observed, target)
         _refresh_fitness(population, encoder, X, y)
-        weights = _population_weights(population)
-        ranked = sorted(
-            zip(population, weights),
-            key=lambda pair: pair[0]["bic"] if pair[0]["bic"] is not None else float("inf"),
-        )
+        viable = [m for m in population if _finite_bic(m)]
+        if not viable:
+            raise CakeNotReadyError
+        weights = _population_weights(viable)
+        ranked = sorted(zip(viable, weights), key=lambda pair: pair[0]["bic"])
         out.append((target, [(m["expression"], w) for m, w in ranked]))
     return out
 
@@ -317,6 +317,11 @@ def _system_prompt(X: torch.Tensor, y: torch.Tensor) -> str:
 # -- fitting helpers ---------------------------------------------------------
 
 
+def _finite_bic(member: dict) -> bool:
+    b = member.get("bic")
+    return b is not None and math.isfinite(b)
+
+
 def _fit_kernel_model(X: torch.Tensor, y: torch.Tensor, encoder: Encoder, expression: str) -> SingleTaskGP:
     kernel = parse_kernel_expression(expression, X.shape[-1])
     return fit_gp(X, y, encoder.domain_bounds, covar_module=kernel)
@@ -368,9 +373,12 @@ def _crossover_step(
     for _ in range(frame.shelf.kernel_num_crossover):
         if len(population) < 2:
             return
-        weights = _population_weights(population)
-        i1, i2 = np.random.choice(len(population), size=2, replace=False, p=weights)
-        parent1, parent2 = population[int(i1)], population[int(i2)]
+        viable = [m for m in population if _finite_bic(m)]
+        if len(viable) < 2:
+            return
+        weights = _population_weights(viable)
+        i1, i2 = np.random.choice(len(viable), size=2, replace=False, p=weights)
+        parent1, parent2 = viable[int(i1)], viable[int(i2)]
 
         try:
             resp = _call_with_hard_timeout(
@@ -418,7 +426,10 @@ def _mutation_step(
 ) -> None:
     if not population or random.random() >= frame.shelf.kernel_mutation_prob:
         return
-    fittest = min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
+    viable = [m for m in population if _finite_bic(m)]
+    if not viable:
+        return
+    fittest = min(viable, key=lambda m: m["bic"])
     try:
         resp = _call_with_hard_timeout(
             lambda: client.chat(
@@ -454,7 +465,7 @@ def evolve_generation(frame: Frame, encoder: Encoder, client: LLMClient, target:
     (CAKE's own `run()` treats "initialize" and "evolve" as the same step).
     """
     observed = frame.observed_trials()
-    X = torch.stack([encoder.encode(t.config) for t in observed])
+    X = encoder.stack_features(observed)
     y, _, _ = _metric_tensors(frame, observed, target)
     population = _population(frame, target)
     state = _evolution_state(frame, target)
@@ -489,9 +500,10 @@ def get_best_kernel(frame: Frame, target: str | None = None) -> str | None | dic
     if target is None:
         return {t: get_best_kernel(frame, t) for t in cake_targets(frame)}
     population = frame.shelf.kernel_populations.get(target) or []
-    if not population:
+    viable = [m for m in population if _finite_bic(m)]
+    if not viable:
         return None
-    return min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))["expression"]
+    return min(viable, key=lambda m: m["bic"])["expression"]
 
 
 def covar_module_for_metric(frame: Frame, d: int, metric: str):
@@ -499,9 +511,10 @@ def covar_module_for_metric(frame: Frame, d: int, metric: str):
     if frame.shelf.surrogate != "cake":
         return None
     population = frame.shelf.kernel_populations.get(metric) or []
-    if not population:
+    viable = [m for m in population if _finite_bic(m)]
+    if not viable:
         return None
-    best = min(population, key=lambda m: m["bic"] if m["bic"] is not None else float("inf"))
+    best = min(viable, key=lambda m: m["bic"])
     try:
         return parse_kernel_expression(best["expression"], d)
     except KernelParseError:
@@ -593,7 +606,7 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
     feasible incumbent exists. One target reduces to classic single-objective BAKER.
     """
     observed = frame.observed_trials()
-    X = torch.stack([encoder.encode(t.config) for t in observed])
+    X = encoder.stack_features(observed)
     bounds = encoder.encode_bounds(frame.shelf.bounds)
     targets = _baker_targets(frame)
     prepared = _prepared_populations(frame, encoder, X, observed, targets)
@@ -630,6 +643,7 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
         out.append(
             {
                 "config": encoder.decode(c["x"]),
+                "x_gp": c["x"].detach().tolist(),
                 "acquisition_values": {acqf_name: c["acq_val"], "baker_score": c["score"]},
                 "trial_id": None,
                 "acqf": acqf_name,
@@ -645,7 +659,7 @@ def baker_score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names:
     kernel combos of prod(softmax(-BIC)) * acqf(combo, x).
     """
     observed = frame.observed_trials()
-    X = torch.stack([encoder.encode(t.config) for t in observed])
+    X = encoder.stack_features(observed)
     targets = _baker_targets(frame)
     prepared = _prepared_populations(frame, encoder, X, observed, targets)
     combos = _kernel_combos(prepared)

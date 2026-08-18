@@ -9,7 +9,7 @@ if [ -f .env ]; then
 fi
 
 PROVIDER="${PROVIDER:-openai-compatible}"
-MODEL="${MODEL:-Qwen-Ambassador/Qwen3.8-Max}"
+MODEL="${MODEL:-Qwen-Ambassador/Qwen3.7-Max}"
 
 # MODELSCOPE_* creds only apply when we're actually pointed at ModelScope --
 # if PROVIDER is overridden (e.g. anthropic/openai), leave BASE_URL/API_KEY
@@ -47,4 +47,24 @@ fi
 # that want to label constrained runs in log output).
 is_constrained_benchmark() {
   [ "$1" = "constrained_hartmann6" ]
+}
+
+# Latest sandbox_*/run_meta.json status under a condition dir: completed,
+# running, failed, missing, or unknown. Used by compare scripts that skip
+# already-finished legs on rerun.
+condition_status() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import json, sys
+d = Path(sys.argv[1])
+if not d.is_dir():
+    print("missing")
+    raise SystemExit
+metas = list(d.glob("sandbox_*/run_meta.json"))
+if not metas:
+    print("missing")
+    raise SystemExit
+latest = max(metas, key=lambda p: p.stat().st_mtime)
+print(json.loads(latest.read_text()).get("status") or "unknown")
+PY
 }

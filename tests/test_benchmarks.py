@@ -59,6 +59,7 @@ def test_new_benchmarks_registered_and_in_bounds():
         "shekel",
         "six_hump_camel",
         "constrained_hartmann6",
+        "bolt_lora",
     ]:
         spec = get_spec(name)
         assert spec.dim == len(spec.bounds)
@@ -440,6 +441,34 @@ def test_plot_compare_renders_single_eval_trace():
     assert len(polys) == 2
     assert len(polys[1].split()) >= 2  # 1-eval run must pad to a visible segment
     assert "1 eval" in svg
+
+
+def test_pick_legend_corner_prefers_empty_bottom_left_for_high_start_curves():
+    from benchmarks.plot_compare import pick_legend_corner
+
+    # High y (near the top of the plot) across most of the x range, like Ackley.
+    x0, y1, x1, y0 = 60, 16, 800, 404
+    w, h = 306, 102
+    points = [(x, 30) for x in range(70, 790, 8)]
+    assert pick_legend_corner(points, x0, y1, x1, y0, w, h) == "bl"
+
+
+def test_pick_legend_corner_avoids_crowded_bottom_right():
+    from benchmarks.plot_compare import pick_legend_corner
+
+    x0, y1, x1, y0 = 60, 16, 800, 404
+    w, h = 306, 102
+    points = [(x, 390) for x in range(500, 790, 4)]
+    assert pick_legend_corner(points, x0, y1, x1, y0, w, h) == "tr"
+
+
+def test_pick_legend_corner_prefers_top_right_when_top_is_empty():
+    from benchmarks.plot_compare import pick_legend_corner
+
+    x0, y1, x1, y0 = 60, 16, 800, 404
+    w, h = 306, 102
+    points = [(x, 390) for x in range(70, 790, 8)]
+    assert pick_legend_corner(points, x0, y1, x1, y0, w, h) == "tr"
 
 
 def test_warmup_n_defaults():

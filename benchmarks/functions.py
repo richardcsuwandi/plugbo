@@ -17,6 +17,10 @@ kernel GP sample drawn fresh per seed via random Fourier features -- by
 construction it cannot appear in any pretraining corpus, so it is the paper's
 own recommended *no-memorization-possible* control. See `_gp_sample_spec`.
 
+`bolt_lora` is a real (non-synthetic) mixed-type HPO surface: an offline MLP
+emulator of Qwen3-8B LoRA fine-tuning from the BOLT suite. There is no
+published closed-form optimum. See `_bolt_lora_spec`.
+
 `constrained_hartmann6` mirrors the paper's "Constrained Hartmann (6-D)"
 benchmark, but the paper does not disclose the exact constraint
 function used, so this is our own reconstruction in the same spirit: a
@@ -49,6 +53,17 @@ class BenchmarkSpec:
     constraint_upper: float | None = None
     extra: dict = field(default_factory=dict)  # side-channel data sandbox.py needs to regenerate the oracle text
     # (e.g. gp_sample's random Fourier feature weights) -- never touched by the harness itself.
+    # Mixed-type search space in lenz JSON form (insertion-ordered true names).
+    # None: every dim is a continuous range taken from `bounds` (textbook path).
+    space: dict | None = None
+    # Torus wraparound of a continuous unit cube. False for mixed-type / surrogate
+    # tasks where wraparound would produce invalid integers or categories.
+    allow_shift: bool = True
+
+
+def true_regret(spec: BenchmarkSpec, y: float) -> float:
+    """Simple regret vs `spec.f_opt`. Positive means worse than the reference."""
+    return (y - spec.f_opt) if spec.minimize else (spec.f_opt - y)
 
 
 def branin(x: list[float]) -> float:
@@ -259,6 +274,31 @@ def six_hump_camel(x: list[float]) -> float:
     return (4 - 2.1 * x1**2 + x1**4 / 3) * x1**2 + x1 * x2 + (-4 + 4 * x2**2) * x2**2
 
 
+def _bolt_lora_spec() -> BenchmarkSpec:
+    """Offline BOLT emulator of Qwen3-8B LoRA fine-tuning (7 mixed parameters).
+
+    Maximize validation score. `f_opt` is BOLT's reported empirical best, used
+    as a gap reference rather than a closed-form optimum. The search space is
+    native mixed-type (float / int / categorical); torus-shifting is disabled.
+    """
+    from .bolt_lora import BOUNDS, F_OPT, SPACE, evaluate_vector
+
+    def bolt_lora(x: list[float]) -> float:
+        return evaluate_vector(x)
+
+    return BenchmarkSpec(
+        name="bolt_lora",
+        dim=7,
+        bounds=list(BOUNDS),
+        fn=bolt_lora,
+        minimize=False,
+        f_opt=F_OPT,
+        extra={"oracle": "bolt_lora"},
+        space=dict(SPACE),
+        allow_shift=False,
+    )
+
+
 REGISTRY: dict[str, BenchmarkSpec] = {
     "branin": BenchmarkSpec(
         name="branin", dim=2, bounds=[(-5.0, 10.0), (0.0, 15.0)], fn=branin, minimize=True, f_opt=0.397887
@@ -301,6 +341,7 @@ REGISTRY: dict[str, BenchmarkSpec] = {
         minimize=True,
         f_opt=-1.0316284535,
     ),
+    "bolt_lora": _bolt_lora_spec(),
 }
 
 _GP_SAMPLE_RE = re.compile(r"^gp_sample(\d+)$")

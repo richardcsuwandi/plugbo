@@ -7,15 +7,23 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+
+def _lenz_bin() -> str:
+    sibling = Path(sys.executable).parent / "lenz"
+    return str(sibling) if sibling.is_file() else "lenz"
 
 
 def lenz(state_path: Path, command: str, *args: str) -> dict:
     # `--state` is a per-subcommand flag, not a global one -- must come after
     # the subcommand (`lenz create --state ./state.json ...`), per lenz/cli.py.
     out = subprocess.run(
-        ["lenz", command, "--state", str(state_path), *args], capture_output=True, text=True, check=True
+        [_lenz_bin(), command, "--state", str(state_path), *args], capture_output=True, text=True
     )
+    if out.returncode != 0:
+        raise RuntimeError(f"lenz {command} failed ({out.returncode}): {out.stderr or out.stdout}")
     payload = json.loads(out.stdout)
     if not payload["ok"]:
         raise RuntimeError(payload["error"])
@@ -23,9 +31,13 @@ def lenz(state_path: Path, command: str, *args: str) -> dict:
 
 
 def evaluate(oracle_path: Path, config: dict) -> dict:
+    # Use this process's interpreter so surrogate oracles (torch, etc.) see
+    # the same env as the harness. Formula oracles only need the stdlib.
     out = subprocess.run(
-        [str(oracle_path), json.dumps(config)], capture_output=True, text=True, check=True
+        [sys.executable, str(oracle_path), json.dumps(config)], capture_output=True, text=True
     )
+    if out.returncode != 0:
+        raise RuntimeError(f"oracle failed ({out.returncode}): {out.stderr or out.stdout}")
     return json.loads(out.stdout)
 
 
@@ -46,6 +58,7 @@ def create_and_warmup(
     create_args: list[str],
     n_warmup: int,
     budget: int,
+    objectives: dict | None = None,
 ) -> int:
     """Creates `sandbox/state.json` and evaluates `n_warmup` Sobol points.
     Returns how many evaluations were recorded (clamped to `budget`).
@@ -59,7 +72,7 @@ def create_and_warmup(
         "--space",
         json.dumps(space),
         "--objectives",
-        json.dumps({"y": "minimize"}),
+        json.dumps(objectives or {"y": "minimize"}),
         *create_args,
     )
     for i in range(1, n_warmup + 1):

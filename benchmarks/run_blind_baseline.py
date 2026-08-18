@@ -86,13 +86,15 @@ def run_blind_baseline(
     secret = json.loads(built["secret_path"].read_text())
     ob = ObfuscatedBenchmark.from_secret(secret)
 
-    create_args = list(policy.lenz_create_args) + list(extra_create_args or [])
+    create_args = list(policy.lenz_create_args) + ["--budget", str(budget)] + list(extra_create_args or [])
     if seed is not None:
         create_args += ["--seed", str(seed)]
     if built["constraints"]:
         create_args += ["--constraints", json.dumps(built["constraints"])]
     n_warm = warmup_n(len(ob.param_names), seed, warmup)
-    already = create_and_warmup(sandbox, ob.unit_space_json(), create_args, n_warm, budget)
+    already = create_and_warmup(
+        sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
+    )
 
     meta_path = sandbox / "run_meta.json"
     meta = {
@@ -142,6 +144,9 @@ def main() -> None:
     p.add_argument("--policy", default="vanilla", choices=sorted(POLICIES), help="see POLICIES in this file")
     p.add_argument("--kernel-llm-provider", default=None, help="required if the policy's surrogate is cake")
     p.add_argument("--kernel-llm-model", default=None, help="required if the policy's surrogate is cake")
+    p.add_argument("--kernel-llm-base-url", default=None, help="required if --kernel-llm-provider is openai-compatible")
+    p.add_argument("--kernel-llm-api-key-env", default=None, help="name of the env var holding the kernel LLM's key -- never the key itself")
+    p.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body")
     p.add_argument(
         "--reveal",
         action="store_true",
@@ -164,6 +169,12 @@ def main() -> None:
         extra_create_args += ["--kernel-llm-provider", args.kernel_llm_provider]
     if args.kernel_llm_model:
         extra_create_args += ["--kernel-llm-model", args.kernel_llm_model]
+    if args.kernel_llm_base_url:
+        extra_create_args += ["--kernel-llm-base-url", args.kernel_llm_base_url]
+    if args.kernel_llm_api_key_env:
+        extra_create_args += ["--kernel-llm-api-key-env", args.kernel_llm_api_key_env]
+    if args.kernel_llm_extra_body:
+        extra_create_args += ["--kernel-llm-extra-body", args.kernel_llm_extra_body]
 
     result = run_blind_baseline(
         benchmark_name=args.benchmark,

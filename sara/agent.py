@@ -85,8 +85,9 @@ def run_campaign(
     trace_path: Path | None = None,
     budget: int | None = None,
     max_steps: int = MAX_STEPS,
+    block_lenz: bool = False,
 ) -> RunResult:
-    tools, handlers = build_tools(sandbox)
+    tools, handlers = build_tools(sandbox, block_lenz=block_lenz)
     history: list[Message] = [Message(role="user", content=user_prompt)]
     transcript: list[dict] = []
     nudged = False

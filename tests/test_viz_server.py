@@ -9,6 +9,7 @@ from viz.server import (
     _run_kind,
     _tool_use_events,
     delete_run,
+    find_compare_groups,
     find_runs,
     run_detail,
 )
@@ -143,6 +144,35 @@ def test_find_runs_includes_meta_and_sorts_by_recency(tmp_path):
     assert [r["name"] for r in runs] == ["newer", "older"]  # most recent first
     assert runs[0]["provider"] == "openai" and runs[0]["model"] == "gpt-x" and runs[0]["status"] == "running"
     assert runs[0]["run_kind"] == "sara"
+
+
+def test_find_runs_includes_taxonomy_from_path(tmp_path):
+    run_dir = tmp_path / "hartmann6-compare" / "sara-only" / "sandbox_abc"
+    run_dir.mkdir(parents=True)
+    _write_state(run_dir / "state.json", [{"metric": "y", "minimize": True}], [])
+    (run_dir / "run_meta.json").write_text(json.dumps({"kind": "sara-only", "status": "completed"}))
+
+    runs = find_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0]["benchmark"] == "hartmann6"
+    assert runs[0]["backend"] == "sara-only"
+    assert runs[0]["disclosure"] == "blind"
+    assert runs[0]["group"] == "hartmann6-compare"
+
+
+def test_find_compare_groups_started_at_falls_back_without_meta_timestamp(tmp_path):
+    run_dir = tmp_path / "ackley10-compare" / "vanilla" / "sandbox_abc"
+    run_dir.mkdir(parents=True)
+    _write_state(
+        run_dir / "state.json",
+        [{"metric": "y", "minimize": True}],
+        [{"trial_id": "a", "config": {"x": 0.1}, "metrics": {"y": 1.0}, "status": "observed", "created_at": 1_700_000_000.0}],
+    )
+    groups = find_compare_groups(tmp_path)
+    assert len(groups) == 1
+    assert groups[0]["heading"] == "Ackley-10 · blind"
+    assert groups[0]["started_at"] is not None
+    assert "2023" in groups[0]["started_at"] or "2024" in groups[0]["started_at"]
 
 
 def test_run_detail_includes_meta_and_duration(tmp_path):

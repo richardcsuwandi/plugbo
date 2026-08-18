@@ -23,12 +23,26 @@ def _system_prompt() -> str:
     return f"{system}\n\n{lenz_ref}"
 
 
+def _system_prompt_sara_only() -> str:
+    return (PROMPTS_DIR / "SARA_ONLY.md").read_text()
+
+
 def _user_prompt(context_text: str, eval_cmd: str, budget: int) -> str:
     return (
         f"{context_text.strip()}\n\n"
         f"Run the experiment as: {eval_cmd} '<config-json>' -- it prints the metrics as a JSON object.\n"
         f"Budget: {budget} evaluations.\n"
         "Keep your lenz state in './state.json' (relative to your sandbox working directory).\n"
+        "Treat the experiment as a black box: do not open or read its implementation; measure it only by running it."
+    )
+
+
+def _user_prompt_sara_only(context_text: str, eval_cmd: str, budget: int) -> str:
+    return (
+        f"{context_text.strip()}\n\n"
+        f"Run the experiment as: {eval_cmd} '<config-json>' -- it prints the metrics as a JSON object.\n"
+        f"Budget: {budget} evaluations.\n"
+        "You propose every configuration yourself. Successful oracle calls are recorded automatically.\n"
         "Treat the experiment as a black box: do not open or read its implementation; measure it only by running it."
     )
 
@@ -51,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--budget", type=int, required=True, help="target number of real evaluations")
     r.add_argument("--workdir", required=True, help="sandbox directory for lenz state + evaluation script")
     r.add_argument("--trace", default=None, help="path to write a JSONL deliberation trace (default: <workdir>/trace.jsonl)")
+    r.add_argument(
+        "--no-lenz",
+        action="store_true",
+        help="pure LLM optimizer: no lenz CLI, no GP, no acquisition. Sara proposes every point.",
+    )
 
     return p
 
@@ -68,15 +87,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
 
     context_text = Path(args.context).read_text()
-    system_prompt = _system_prompt()
-    user_prompt = _user_prompt(context_text, args.eval, args.budget)
+    no_lenz = bool(getattr(args, "no_lenz", False))
+    if no_lenz:
+        system_prompt = _system_prompt_sara_only()
+        user_prompt = _user_prompt_sara_only(context_text, args.eval, args.budget)
+    else:
+        system_prompt = _system_prompt()
+        user_prompt = _user_prompt(context_text, args.eval, args.budget)
 
     client = get_client(args.provider, args.model, base_url=args.base_url, api_key=args.api_key)
     trace_path = Path(args.trace) if args.trace else workdir / "trace.jsonl"
     meta_path = workdir / "run_meta.json"
 
     meta = {
-        "kind": "sara",
+        "kind": "sara-only" if no_lenz else "sara",
         "provider": args.provider,
         "model": args.model,
         "base_url": args.base_url,
@@ -86,6 +110,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         "started_at": _now_iso(),
         "ended_at": None,
         "status": "running",
+        "no_lenz": no_lenz,
     }
     _write_meta(meta_path, meta)
 
@@ -97,6 +122,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             sandbox=workdir,
             trace_path=trace_path,
             budget=args.budget,
+            block_lenz=no_lenz,
         )
     except Exception as e:
         meta.update(ended_at=_now_iso(), status="failed", error=str(e))

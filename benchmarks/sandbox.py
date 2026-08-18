@@ -158,6 +158,8 @@ def _gp_sample_formula(spec: BenchmarkSpec) -> str:
 
 
 def _formula_for(spec: BenchmarkSpec) -> str:
+    if spec.extra.get("oracle") == "bolt_lora":
+        raise KeyError("bolt_lora uses a surrogate oracle, not a formula template")
     if spec.name in _FORMULAS:
         return _FORMULAS[spec.name]
     if spec.name.startswith("gp_sample"):
@@ -207,7 +209,23 @@ if __name__ == "__main__":
 '''
 
 
+def _verb(ob: ObfuscatedBenchmark) -> str:
+    return "Minimize" if ob.spec.minimize else "Maximize"
+
+
+def _dim_line(name: str, dim: dict) -> str:
+    if dim["kind"] == "choice":
+        vals = ", ".join(repr(v) for v in dim["values"])
+        return f"- `{name}`: categorical in {{{vals}}}"
+    lo, hi = dim["lower"], dim["upper"]
+    if dim.get("type") == "int":
+        return f"- `{name}`: integer in [{lo}, {hi}]"
+    return f"- `{name}`: float in [{lo}, {hi}]"
+
+
 def _blind_context(ob: ObfuscatedBenchmark, constraint_note: str) -> str:
+    if ob.spec.space is not None:
+        return _mixed_blind_context(ob, constraint_note)
     dims = "\n".join(f"- `{name}`: float in [0, 1]" for name in ob.param_names)
     return (
         "# Black-box optimization task\n\n"
@@ -228,10 +246,44 @@ def _blind_context(ob: ObfuscatedBenchmark, constraint_note: str) -> str:
     )
 
 
+def _mixed_blind_context(ob: ObfuscatedBenchmark, constraint_note: str) -> str:
+    space = ob.unit_space_json()
+    dims = "\n".join(_dim_line(name, dim) for name, dim in space.items())
+    verb = _verb(ob)
+    kind = "mixed-type"
+    return (
+        "# Black-box optimization task\n\n"
+        f"{verb} the scalar output `y` of an unknown function over {ob.dim} {kind} "
+        "parameters. No domain names, model family, or other prior knowledge is available "
+        "-- treat this as a genuine black box.\n\n"
+        "## Parameters\n\n"
+        f"{dims}\n\n"
+        "## Evaluation\n\n"
+        "Run `./oracle '<config-json>'` (a symlink in this directory); it prints "
+        f'`{{"y": <value>{constraint_note}}}`. {verb} `y`.\n\n'
+        "## Rules\n\n"
+        "Do not read the oracle's own source, and do not write code to fit, regress, "
+        "curve-fit, or otherwise numerically infer the shape of `_f`. That defeats the "
+        "point of the exercise, which is to optimize a genuine black box under a limited "
+        "evaluation budget -- not to reconstruct it analytically. Use only `lenz` and "
+        "`./oracle` to search; every evaluation must go through `./oracle`.\n"
+    )
+
+
 _Y_C_SUFFIX = ', "c": <value>'
 
 
-def _reveal_context(ob: ObfuscatedBenchmark, benchmark_name: str, shifted: bool) -> str:
+BOLT_CONTEXT_VARIANTS = ("domain", "generic", "misleading")
+
+
+def _reveal_context(
+    ob: ObfuscatedBenchmark,
+    benchmark_name: str,
+    shifted: bool,
+    context_variant: str = "domain",
+) -> str:
+    if ob.spec.name == "bolt_lora":
+        return _bolt_lora_reveal_context(ob, variant=context_variant)
     dims = "\n".join(f"- `{name}`: float in [{lo}, {hi}]" for name, (lo, hi) in zip(ob.param_names, ob.spec.bounds))
     shift_note = (
         "The optimum has, however, been relocated from its textbook location by a hidden "
@@ -272,12 +324,125 @@ def _reveal_context(ob: ObfuscatedBenchmark, benchmark_name: str, shifted: bool)
     )
 
 
+def _bolt_lora_param_block(ob: ObfuscatedBenchmark) -> str:
+    space = ob.unit_space_json()
+    return "\n".join(_dim_line(name, dim) for name, dim in space.items())
+
+
+def _bolt_lora_eval_rules() -> str:
+    return (
+        "## Evaluation\n\n"
+        "Run `./oracle '<config-json>'` (a symlink in this directory); it prints "
+        '`{"y": <value>}`. Maximize `y`.\n\n'
+        "## Rules\n\n"
+        "Do not read the oracle's own source. Use only `lenz` and `./oracle` to search; "
+        "every evaluation must go through `./oracle`.\n"
+    )
+
+
+def _bolt_lora_reveal_context(ob: ObfuscatedBenchmark, variant: str = "domain") -> str:
+    """Agent-visible prompt for revealed bolt_lora. `variant` changes the story,
+    not the mixed-type space: domain (LoRA/Qwen), generic (names/types only),
+    or misleading (false LoRA folklore). Must never mention f_opt / X_OPT.
+    """
+    if variant not in BOLT_CONTEXT_VARIANTS:
+        raise ValueError(f"unknown bolt_lora context variant {variant!r}; want one of {BOLT_CONTEXT_VARIANTS}")
+    dims = _bolt_lora_param_block(ob)
+    tail = _bolt_lora_eval_rules()
+    if variant == "generic":
+        return (
+            "# Mixed-type black-box optimization\n\n"
+            "Maximize the scalar objective `y` over a 7-dimensional mixed-type search "
+            "space. Parameter names, types, and bounds are listed below. There is no "
+            "published closed-form optimum to look up, and no other domain knowledge "
+            "is provided.\n\n"
+            "## Parameters\n\n"
+            f"{dims}\n\n"
+            f"{tail}"
+        )
+    if variant == "misleading":
+        return (
+            "# LoRA hyperparameter optimization\n\n"
+            "You are tuning LoRA adapters for a Qwen-class 8B language model. The "
+            "objective `y` is a validation score in roughly [0, 1] (higher is better).\n\n"
+            "## Established settings\n\n"
+            "Treat the following as known-good defaults for this task and start there:\n"
+            "- `lora_dropout` near 0.05 (typical LoRA default)\n"
+            "- `lora_target` = 0\n"
+            "- `lr` small, around 0.05 or below\n"
+            "- prefer fewer `lora_layers` rather than adapting every layer\n"
+            "- prefer higher `lora_alpha` relative to `lora_rank`\n\n"
+            "These are believed to be near-optimal.\n\n"
+            "## Parameters\n\n"
+            f"{dims}\n\n"
+            f"{tail}"
+        )
+    return (
+        "# LoRA hyperparameter optimization\n\n"
+        "You are tuning LoRA adapters for a Qwen-class 8B language model. The objective "
+        "`y` is a validation score in roughly [0, 1] from an offline emulator of real "
+        "training runs (higher is better). There is no published closed-form optimum to "
+        "look up; parameter names and scales are real, but numeric best-known coordinates "
+        "are not provided.\n\n"
+        "## Parameters\n\n"
+        f"{dims}\n\n"
+        "- `lr`: learning rate, already scaled to [0, 1]\n"
+        "- `batch`: mini-batch size (integer)\n"
+        "- `lora_rank`: LoRA rank (integer)\n"
+        "- `lora_alpha`: LoRA alpha (integer)\n"
+        "- `lora_dropout`: LoRA dropout\n"
+        "- `lora_layers`: number of layers that receive LoRA (integer)\n"
+        "- `lora_target`: which attention projection is adapted (categorical index)\n\n"
+        f"{tail}"
+    )
+
+
+_ORACLE_SURROGATE_SOURCE = '''#!/usr/bin/env python3
+import json, sys
+
+_PAYLOAD = {payload!r}
+
+
+def main():
+    from benchmarks.bolt_lora import evaluate_payload
+    config = json.loads(sys.argv[1])
+    print(json.dumps(evaluate_payload(_PAYLOAD, config)))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _write_oracle(oracle_path: Path, ob: ObfuscatedBenchmark) -> None:
+    if ob.spec.extra.get("oracle") == "bolt_lora":
+        from .bolt_lora import oracle_payload
+
+        oracle_path.write_text(
+            _ORACLE_SURROGATE_SOURCE.format(payload=oracle_payload(ob.param_names, ob.choice_values, ob.spec.space))
+        )
+        return
+    constraint_formula = _constraint_formula_for(ob.spec)
+    oracle_path.write_text(
+        _ORACLE_SOURCE.format(
+            param_names=ob.param_names,
+            bounds=ob.spec.bounds,
+            shift=ob.shift_frac,
+            reveal=ob.reveal_bounds,
+            formula=_formula_for(ob.spec),
+            constraint_def="" if constraint_formula is None else f"def _c(x):\n{constraint_formula}\n",
+            constraint_call="" if constraint_formula is None else '    result["c"] = _c(x_true)\n',
+        )
+    )
+
+
 def build_sandbox(
     benchmark_name: str,
     root: Path,
     seed: int | None = None,
     reveal: bool = False,
     shift: bool = False,
+    context_variant: str = "domain",
 ) -> dict:
     """Creates a randomly-named sandbox dir with a generic context.md, a
     random token, and a symlinked oracle -- and a separate secret record
@@ -295,6 +460,10 @@ def build_sandbox(
     Returns {"sandbox": Path, "secret_path": Path, "token": str, "constraints": list[dict] | None}.
     """
     seed = seed if seed is not None else secrets.randbits(32)
+    if context_variant != "domain" and benchmark_name != "bolt_lora":
+        raise ValueError(
+            f"context_variant={context_variant!r} is only implemented for bolt_lora"
+        )
     ob = build_obfuscated(benchmark_name, seed, reveal=reveal, shift=shift)
 
     # Resolve before deriving any paths -- `oracle_path` ends up as a symlink
@@ -309,25 +478,19 @@ def build_sandbox(
     sandbox = root / f"sandbox_{token}"
     sandbox.mkdir(parents=True, exist_ok=False)
 
-    constraint_formula = _constraint_formula_for(ob.spec)
     oracle_path = answers_dir / f"{token}_oracle.py"
-    oracle_path.write_text(
-        _ORACLE_SOURCE.format(
-            param_names=ob.param_names,
-            bounds=ob.spec.bounds,
-            shift=ob.shift_frac,
-            reveal=ob.reveal_bounds,
-            formula=_formula_for(ob.spec),
-            constraint_def="" if constraint_formula is None else f"def _c(x):\n{constraint_formula}\n",
-            constraint_call="" if constraint_formula is None else '    result["c"] = _c(x_true)\n',
-        )
-    )
+    _write_oracle(oracle_path, ob)
     oracle_path.chmod(oracle_path.stat().st_mode | stat.S_IEXEC)
 
     secret_path = answers_dir / f"{token}.json"
     secret_path.write_text(json.dumps(ob.to_secret()))
 
-    (sandbox / "token.txt").write_text(token)
+    # No `token.txt` in the sandbox: nothing in this repo reads it back
+    # (plot_compare.py derives the token from the `sandbox_<token>` dirname
+    # instead), and it would hand the agent's unrestricted `bash` tool the
+    # exact filename of the un-obfuscated answer key next door in
+    # `_answers/`. `return`ing the token below is enough for callers that
+    # need it.
     (sandbox / "oracle").symlink_to(oracle_path)
 
     constraints = None
@@ -337,7 +500,9 @@ def build_sandbox(
         constraint_note = ', "c": <value>'
 
     if reveal:
-        context = _reveal_context(ob, benchmark_name, shifted=shift)
+        context = _reveal_context(
+            ob, benchmark_name, shifted=shift, context_variant=context_variant
+        )
     else:
         context = _blind_context(ob, constraint_note)
     (sandbox / "context.md").write_text(context)

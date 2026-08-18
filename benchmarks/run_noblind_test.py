@@ -37,7 +37,7 @@ import json
 from pathlib import Path
 
 from sara.agent import run_campaign
-from sara.cli import _now_iso, _system_prompt, _user_prompt, _write_meta
+from sara.cli import _now_iso, _system_prompt, _system_prompt_sara_only, _user_prompt, _user_prompt_sara_only, _write_meta
 from llm.factory import get_client
 
 from .lenz_loop import create_and_warmup
@@ -85,36 +85,85 @@ def run_noblind_test(
     kernel_llm_base_url: str | None = None,
     kernel_llm_api_key_env: str | None = None,
     kernel_llm_extra_body: str | None = None,
+    no_lenz: bool = False,
+    context_variant: str = "domain",
 ) -> dict:
-    built = build_sandbox(benchmark_name, root=root, seed=seed, reveal=True, shift=shift)
+    built = build_sandbox(
+        benchmark_name,
+        root=root,
+        seed=seed,
+        reveal=True,
+        shift=shift,
+        context_variant=context_variant,
+    )
     sandbox: Path = built["sandbox"]
 
     secret = json.loads(built["secret_path"].read_text())
     ob = ObfuscatedBenchmark.from_secret(secret)
-    create_args = _lenz_create_args(
-        surrogate,
-        acqf,
-        seed=seed,
-        constraints=built["constraints"],
-        kernel_llm_provider=kernel_llm_provider,
-        kernel_llm_model=kernel_llm_model,
-        kernel_llm_base_url=kernel_llm_base_url,
-        kernel_llm_api_key_env=kernel_llm_api_key_env,
-        kernel_llm_extra_body=kernel_llm_extra_body,
-    )
-    n_warm = max(0, warmup)
-    already = create_and_warmup(sandbox, ob.unit_space_json(), create_args, n_warm, budget)
+
+    if no_lenz:
+        from .sara_only import install_sara_only
+
+        # Opt-in only (see run_blind_test.py's identical comment): a
+        # --no-lenz run that never passes --warmup keeps its historical
+        # zero-warmup behavior. Passing --warmup N runs the same real
+        # Sobol warm-start the lenz-backed sibling conditions get, via the
+        # harness itself (never exposed to the agent), so the comparison
+        # isn't silently handing sara-only N free extra evaluations.
+        n_warm = max(0, warmup) if warmup else 0
+        already = 0
+        if n_warm:
+            warm_create_args = _lenz_create_args(
+                surrogate, acqf, budget, seed=seed, constraints=built["constraints"]
+            )
+            already = create_and_warmup(
+                sandbox, ob.unit_space_json(), warm_create_args, n_warm, budget, objectives=ob.objectives_json()
+            )
+
+        install_sara_only(
+            sandbox,
+            space=ob.unit_space_json(),
+            objectives=ob.objectives_json(),
+            constraints=built["constraints"],
+            budget=budget,
+            preserve_trials=already > 0,
+        )
+        user_prompt = _user_prompt_sara_only((sandbox / "context.md").read_text(), "./oracle", budget)
+        if already:
+            user_prompt += (
+                f"\n\n{already} evaluation(s) already ran before you started (uninformed "
+                f"space-filling, not chosen by you) and are logged in `./state.json`. "
+                f"{budget - already} evaluation(s) remain in your budget.\n"
+            )
+        system_prompt = _system_prompt_sara_only()
+    else:
+        create_args = _lenz_create_args(
+            surrogate,
+            acqf,
+            budget,
+            seed=seed,
+            constraints=built["constraints"],
+            kernel_llm_provider=kernel_llm_provider,
+            kernel_llm_model=kernel_llm_model,
+            kernel_llm_base_url=kernel_llm_base_url,
+            kernel_llm_api_key_env=kernel_llm_api_key_env,
+            kernel_llm_extra_body=kernel_llm_extra_body,
+        )
+        n_warm = max(0, warmup)
+        already = create_and_warmup(
+            sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
+        )
+        user_prompt = _user_prompt((sandbox / "context.md").read_text(), "./oracle", budget)
+        user_prompt += _backend_directive(already, budget, create_args)
+        system_prompt = _system_prompt()
 
     parsed_extra_body = json.loads(extra_body) if extra_body else None
     client = get_client(provider, model, base_url=base_url, api_key=api_key, extra_body=parsed_extra_body)
-    context_text = (sandbox / "context.md").read_text()
-    user_prompt = _user_prompt(context_text, "./oracle", budget)
-    user_prompt += _backend_directive(already, budget, create_args)
 
     trace_path = sandbox / "trace.jsonl"
     meta_path = sandbox / "run_meta.json"
     meta = {
-        "kind": "sara-noblind",
+        "kind": "sara-only" if no_lenz else "sara-noblind",
         "provider": provider,
         "model": model,
         "base_url": base_url,
@@ -123,23 +172,26 @@ def run_noblind_test(
         "started_at": _now_iso(),
         "ended_at": None,
         "status": "running",
-        "surrogate": surrogate,
-        "acqf": acqf,
+        "surrogate": "none" if no_lenz else surrogate,
+        "acqf": "none" if no_lenz else acqf,
         "seed": seed,
         "warmup": already,
         "reveal": True,
         "shift": shift,
+        "no_lenz": no_lenz,
+        "context_variant": context_variant,
     }
     _write_meta(meta_path, meta)
 
     try:
         result = run_campaign(
             client=client,
-            system_prompt=_system_prompt(),
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
             sandbox=sandbox,
             trace_path=trace_path,
             budget=budget,
+            block_lenz=no_lenz,
         )
     except Exception as e:
         meta.update(ended_at=_now_iso(), status="failed", error=str(e))
@@ -199,6 +251,18 @@ def main() -> None:
     p.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body, e.g. '{\"enable_thinking\": false}'")
     p.add_argument("--extra-body", default=None, help="JSON object merged into sara's own LLM request body")
     p.add_argument("--one-shot-tol", type=float, default=1e-2, help="absolute regret threshold counted as a 'hit' on evaluation #1")
+    p.add_argument(
+        "--no-lenz",
+        action="store_true",
+        help="pure LLM optimizer: Sara proposes every point; lenz is not created and cannot be called",
+    )
+    p.add_argument(
+        "--context-variant",
+        default="domain",
+        choices=["domain", "generic", "misleading"],
+        help="bolt_lora only: domain (LoRA/Qwen story), generic (names/types, no domain prose), "
+        "misleading (false LoRA folklore). Other benchmarks must stay at domain.",
+    )
     args = p.parse_args()
 
     result = run_noblind_test(
@@ -221,6 +285,8 @@ def main() -> None:
         kernel_llm_base_url=args.kernel_llm_base_url,
         kernel_llm_api_key_env=args.kernel_llm_api_key_env,
         kernel_llm_extra_body=args.kernel_llm_extra_body,
+        no_lenz=args.no_lenz,
+        context_variant=args.context_variant,
     )
 
     print("\n=== No-blind (identity-revealed) test result ===")

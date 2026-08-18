@@ -23,6 +23,7 @@ import json
 import math
 from pathlib import Path
 
+from .functions import true_regret
 from .obfuscate import ObfuscatedBenchmark
 
 COLORS = ["#4C78A8", "#F58518", "#54A24B", "#B279A2", "#E45756", "#72B7B2", "#EECA3B", "#9D755D"]
@@ -38,9 +39,31 @@ def _pick_state(condition_dir: Path) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _run_budget(run_dir: Path) -> int | None:
+    """`run_meta.json`'s recorded budget for this sandbox, or None if there's
+    no meta file or it never recorded one (e.g. very old runs)."""
+    meta_path = run_dir / "run_meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    budget = meta.get("budget")
+    return budget if isinstance(budget, int) else None
+
+
 def regret_trace(condition_dir: Path) -> list[float] | None:
     """Best-so-far true regret after each observed evaluation, in trial
-    order. None if the condition directory has no scoreable run yet.
+    order, capped at the run's evaluation budget. None if the condition
+    directory has no scoreable run yet.
+
+    The cap matters for sandboxes recorded before the hard budget guardrail
+    in `lenz/state.py` existed: those could over-run (e.g. an agent recording
+    108 evaluations against a 100 budget), which would otherwise make that
+    condition look unfairly strong against conditions that stayed in budget.
+    Truncating here -- rather than editing the sandbox's state.json -- keeps
+    the raw historical record intact while making every comparison plot fair.
     """
     state_path = _pick_state(condition_dir)
     if state_path is None:
@@ -64,8 +87,12 @@ def regret_trace(condition_dir: Path) -> list[float] | None:
         # regret -- skip it (mirrors run_blind_test.score_sandbox's feasibility gate)
         if constrained and not ("c" in metrics and float(metrics["c"]) <= spec.constraint_upper):
             continue
-        best = min(best, float(metrics["y"]) - spec.f_opt)
+        best = min(best, true_regret(spec, float(metrics["y"])))
         trace.append(best)
+
+    budget = _run_budget(state_path.parent)
+    if budget is not None and len(trace) > budget:
+        trace = trace[:budget]
     return trace
 
 
@@ -104,9 +131,7 @@ def condition_summary(condition_dir: Path) -> dict | None:
         except (json.JSONDecodeError, OSError):
             meta = None
 
-    budget = meta.get("budget") if meta else None
-    if not isinstance(budget, int):
-        budget = None
+    budget = _run_budget(run_dir)
     meta_status = meta.get("status") if meta else None
     n_evals = len(trace)
 
@@ -125,6 +150,49 @@ def _with_eval_zero(trace: list[float]) -> list[float]:
     """Prepend eval 0 (no observations yet) so every condition starts at the
     same point before the first evaluation diverges."""
     return [float("inf"), *trace]
+
+
+def _legend_origin(
+    corner: str,
+    x0: float,
+    y1: float,
+    x1: float,
+    y0: float,
+    legend_w: float,
+    legend_h: float,
+    inset: float = 4.0,
+) -> tuple[float, float]:
+    left = x0 + inset if corner[1] == "l" else x1 - legend_w - inset
+    top = y1 + inset if corner[0] == "t" else y0 - legend_h - inset
+    return left, top
+
+
+def pick_legend_corner(
+    points: list[tuple[float, float]],
+    x0: float,
+    y1: float,
+    x1: float,
+    y0: float,
+    legend_w: float,
+    legend_h: float,
+    inset: float = 4.0,
+) -> str:
+    """Choose the plot corner whose legend box covers the fewest curve points.
+
+    Ties keep the earlier of tr, bl, br, tl so the default is the classic
+    top-right overlay unless that corner sits on the curves (Ackley).
+    """
+    order = ("tr", "bl", "br", "tl")
+    best = order[0]
+    best_hits: int | None = None
+    for corner in order:
+        left, top = _legend_origin(corner, x0, y1, x1, y0, legend_w, legend_h, inset)
+        right, bottom = left + legend_w, top + legend_h
+        hits = sum(1 for x, y in points if left <= x <= right and top <= y <= bottom)
+        if best_hits is None or hits < best_hits:
+            best, best_hits = corner, hits
+    return best
+
 
 
 def collect_traces(root: Path) -> dict[str, list[float]]:
@@ -202,16 +270,22 @@ def _chart_svg(traces: dict[str, list[float]], width: int = 820, height: int = 4
             f'stroke="currentColor" stroke-width="1" stroke-opacity="0.4"/>'
         )
 
-    # Top-right legend, drawn last so it sits above curves. Eval 0 anchors
-    # top-left; converged runs flatten along the bottom, especially bottom-right.
+    # Legend sits in the emptiest corner so it does not cover still-high
+    # curves (Ackley, top-right) or converged floors (Hartmann, bottom-right).
     legend_row_h = 18
     legend_pad = 6
     legend_w = 300
     legend_h = len(legend_rows) * legend_row_h + legend_pad * 2
-    legend_top = y1 + 4
-    legend_left = x1 - legend_w - legend_pad
+    box_w = legend_w + legend_pad
+    curve_pts = [
+        (X(j), Y(v))
+        for label, trace in traces.items()
+        for j, v in enumerate(pad_trace(plot_traces[label]))
+    ]
+    corner = pick_legend_corner(curve_pts, x0, y1, x1, y0, box_w, legend_h)
+    legend_left, legend_top = _legend_origin(corner, x0, y1, x1, y0, box_w, legend_h)
     parts.append(
-        f'<rect x="{legend_left}" y="{legend_top}" width="{legend_w + legend_pad}" height="{legend_h}" '
+        f'<rect x="{legend_left}" y="{legend_top}" width="{box_w}" height="{legend_h}" '
         f'rx="4" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-opacity="0.20"/>'
     )
     legend_x = legend_left + legend_pad

@@ -28,6 +28,8 @@ Three pieces:
   sandboxed to a working directory, using system prompts from the Meta paper
   appendix. Sara frames the problem, calls `lenz create`, and loops
   suggest/evaluate/observe. She can pin `fixed` or `cake` for the whole run.
+  `--no-lenz` drops the backend entirely: Sara proposes configs and calls
+  `./oracle` herself (the test of whether the LLM can be the optimizer).
 
 This is an **independent from-scratch reimplementation** of the agentic BO stack.
 The Meta paper has no released reference code. This repo is **not** an official
@@ -135,6 +137,13 @@ sees. List available functions:
 python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
 ```
 
+Real mixed-type HPO (not a textbook function): `bolt_lora` is the BOLT LoRA
+emulator of Qwen3-8B fine-tuning (7 parameters: float / int / categorical).
+It needs `pip install -e '.[bolt]'` once so the first evaluation can download
+the Hugging Face weights. Scoring uses gap to BOLT's reported empirical best,
+not a closed-form optimum. Blind mode renames parameters but keeps native
+types; torus-shifting is disabled.
+
 **Blind run** (hidden identity, scores true regret afterward):
 
 ```bash
@@ -142,6 +151,10 @@ python3 -m benchmarks.run_blind_test \
   --benchmark hartmann6 --provider anthropic --model claude-opus-5 \
   --budget 30 --root ./results/logs/blind-1
 ```
+
+Pass `--no-lenz` for a Sara-only run: the LLM proposes every point, lenz is
+never created, and the sandbox cannot import or invoke it. That is the probe
+for "can the LLM act as the optimizer itself."
 
 **Revealed run** (real benchmark name and bounds; see disclosure levels below):
 
@@ -160,15 +173,24 @@ CAKE also needs `--kernel-llm-provider` and `--kernel-llm-model`.
 
 ## Compare scripts
 
-Three shell scripts overlay regret curves across condition folders under
+Compare scripts overlay regret curves across condition folders under
 `results/logs/`. Defaults: budget `100`, seed `42`. Provider and model from
-`scripts/_compare_env.sh`.
+`scripts/_compare_env.sh`. `run_bolt_lora_compare.sh` is the regime-2 sweep (mixed-type HPO, no textbook
+optimum): vanilla vs cake without Sara, then revealed Sara+lenz,
+Sara+lenz+cake, and Sara-only (no lenz). Completed and in-flight legs are
+skipped, so a crash-and-rerun does not redo vanilla or cake. Shift and
+one-shot disclosure do not apply. To add Sara-only and cake-only onto
+already-finished groups of *other* benchmarks, use `run_complement_backends.sh`.
 
 | Script | What varies | Output dir |
 |---|---|---|
 | `run_benchmark_compare.sh <benchmark>` | backend (vanilla, sara-lenz, sara-lenz-cake) | `results/logs/<benchmark>-compare` |
 | `run_benchmark_noblind_compare.sh <benchmark> [--shift-only]` | same backends, identity revealed | `results/logs/<benchmark>-noblind-compare-3config` |
 | `run_noblind_compare.sh <benchmark> [--config …]` | disclosure level (see below) | `results/logs/<benchmark>-noblind-compare` |
+| `run_bolt_lora_compare.sh [budget] [seed]` | vanilla, cake, sara-lenz, sara-lenz-cake, sara-only; skips completed | `results/logs/bolt_lora-compare` |
+| `run_bolt_lora_followup.sh [list\|1\|2\|3\|all]` | wave 1: generic/misleading context (seed 42); wave 2: domain seeds 7/13; wave 3: seeds 5/11 if still needed | `results/logs/bolt_lora-generic-compare`, `-misleading-compare`, `-seedN-compare` |
+| `run_complement_backends.sh [list\|run]` | add `sara-only` and `cake` into existing groups; skip completed/running | same dirs as above |
+| `run_unclaimed.sh [list\|run] [--rq5]` | leftover legs not finished, in-flight, or queued by those parents | same dirs; RQ5 is new disclosure groups |
 
 The first two scripts hold disclosure fixed and ask which backend wins. The third
 holds the backend fixed and walks through all three disclosure levels.
@@ -194,6 +216,13 @@ budget 100 so blind, shifted, and unshifted curves share the same x-axis.
 ./scripts/run_benchmark_noblind_compare.sh hartmann6 100 42 --shift-only
 ./scripts/run_noblind_compare.sh hartmann6
 ./scripts/run_noblind_compare.sh hartmann6 100 42 --config sara-lenz-cake
+./scripts/run_bolt_lora_compare.sh
+./scripts/run_bolt_lora_compare.sh --list
+./scripts/run_bolt_lora_compare.sh 100 42 --no-agent-only
+./scripts/run_bolt_lora_compare.sh 100 42 --agent-only
+./scripts/run_bolt_lora_followup.sh list
+./scripts/run_bolt_lora_followup.sh 1
+./scripts/run_bolt_lora_followup.sh 2
 ```
 
 Override provider/model per run:
@@ -243,6 +272,7 @@ change needed to add a new condition folder.
 
 ```bash
 pip install -e ".[dev]"
+pip install -e ".[bolt]"   # optional: BOLT LoRA HPO emulator
 pytest
 pytest -m "not slow"
 ```

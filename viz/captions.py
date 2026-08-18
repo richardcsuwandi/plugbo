@@ -27,10 +27,26 @@ _LAYOUTS: list[tuple[str, str]] = [
         "Fixed Sara+Lenz: compare blind, revealed+shifted, and revealed disclosure on {bench}.",
     ),
     (
+        "-misleading-compare",
+        "Misleading LoRA folklore in context.md: compare conditions on {bench}.",
+    ),
+    (
+        "-generic-compare",
+        "Generic context (names and types kept, no LoRA story): compare conditions on {bench}.",
+    ),
+    (
         "-compare",
         "Blind search: compare vanilla BO, Sara+Lenz, and CAKE on {bench}.",
     ),
 ]
+
+# `*-compare` is a blind backend sweep for textbook functions. bolt_lora-compare
+# is the exception: run_bolt_lora_compare.sh always passes --reveal and writes
+# domain LoRA/Qwen context.md (real names, no textbook optimum).
+_REVEALED_COMPARE_BENCHES = frozenset({"bolt_lora"})
+_BOLT_DOMAIN_CAPTION = (
+    "Domain LoRA/Qwen context (real names, no textbook optimum): compare conditions on {bench}."
+)
 
 _BENCH_LABELS: dict[str, str] = {
     "hartmann6": "Hartmann-6",
@@ -46,6 +62,7 @@ _BENCH_LABELS: dict[str, str] = {
     "styblinski_tang": "Styblinski-Tang",
     "shekel": "Shekel",
     "six_hump_camel": "six-hump camel",
+    "bolt_lora": "BOLT LoRA HPO",
 }
 
 
@@ -64,9 +81,174 @@ def bench_label(benchmark: str) -> str:
 def experiment_caption(group_name: str) -> str:
     """Short goal statement for a compare-group directory name."""
     leaf = group_name.rstrip("/").split("/")[-1]
+    seed_m = re.fullmatch(r"(.+)-seed(\d+)-compare", leaf)
+    if seed_m:
+        return (
+            f"Revealed mixed-type HPO, seed {seed_m.group(2)}: compare conditions on "
+            f"{bench_label(seed_m.group(1))}."
+        )
     for suffix, template in _LAYOUTS:
         if leaf.endswith(suffix):
             benchmark = leaf[: -len(suffix)]
             if benchmark:
+                if suffix == "-compare" and benchmark in _REVEALED_COMPARE_BENCHES:
+                    return _BOLT_DOMAIN_CAPTION.format(bench=bench_label(benchmark))
                 return template.format(bench=bench_label(benchmark))
     return f"Compare conditions on {leaf.replace('-', ' ')}."
+
+
+BACKEND_LABELS = {
+    "vanilla": "Vanilla",
+    "cake": "CAKE",
+    "sara-lenz": "Sara+lenz",
+    "sara-cake": "Sara+CAKE",
+    "sara-only": "Sara-only",
+}
+
+DISCLOSURE_LABELS = {
+    "blind": "Blind",
+    "revealed": "Revealed",
+    "shifted": "Shifted",
+}
+
+_CONDITION_BACKEND = {
+    "vanilla": "vanilla",
+    "cake": "cake",
+    "sara-lenz": "sara-lenz",
+    "sara-lenz-cake": "sara-cake",
+    "sara-only": "sara-only",
+}
+
+_CONDITION_DISCLOSURE = {
+    "blind": "blind",
+    "noblind": "revealed",
+    "noblind-shift": "shifted",
+}
+
+_GROUP_BACKEND = {
+    "-noblind-compare-vanilla": "vanilla",
+    "-noblind-compare-cake": "sara-cake",
+    "-noblind-compare": "sara-lenz",
+}
+
+
+def parse_group_leaf(leaf: str) -> dict:
+    """Benchmark / axis / default disclosure / backend implied by a compare-group folder name."""
+    out = {
+        "benchmark": None,
+        "axis": "other",
+        "disclosure": None,
+        "backend": None,
+        "context": None,
+        "seed": None,
+    }
+    seed_m = re.fullmatch(r"(.+)-seed(\d+)-compare", leaf)
+    if seed_m:
+        out["benchmark"] = seed_m.group(1)
+        out["axis"] = "backend"
+        out["disclosure"] = "revealed"
+        out["seed"] = int(seed_m.group(2))
+        return out
+    for suffix, _template in _LAYOUTS:
+        if leaf.endswith(suffix) and len(leaf) > len(suffix):
+            out["benchmark"] = leaf[: -len(suffix)]
+            if suffix == "-compare":
+                out["axis"] = "backend"
+                if out["benchmark"] in _REVEALED_COMPARE_BENCHES:
+                    out["disclosure"] = "revealed"
+                    out["context"] = "domain"
+                else:
+                    out["disclosure"] = "blind"
+            elif suffix == "-generic-compare":
+                out["axis"] = "backend"
+                out["disclosure"] = "revealed"
+                out["context"] = "generic"
+            elif suffix == "-misleading-compare":
+                out["axis"] = "backend"
+                out["disclosure"] = "revealed"
+                out["context"] = "misleading"
+            elif suffix == "-noblind-compare-3config-shifted":
+                out["axis"] = "backend"
+                out["disclosure"] = "shifted"
+            elif suffix == "-noblind-compare-3config":
+                out["axis"] = "backend"
+                out["disclosure"] = "revealed"
+            elif suffix in _GROUP_BACKEND:
+                out["axis"] = "disclosure"
+                out["backend"] = _GROUP_BACKEND[suffix]
+            break
+    return out
+
+
+def split_run_path(rel: str) -> tuple[str, str]:
+    """`(group, condition)` for a run path. Drops a trailing `sandbox_*` folder."""
+    parts = [p for p in rel.replace("\\", "/").split("/") if p]
+    if parts and parts[-1].startswith("sandbox_"):
+        parts = parts[:-1]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return "", parts[0]
+    return "/".join(parts[:-1]), parts[-1]
+
+
+def classify_relpath(rel: str) -> dict:
+    """Stable filter fields derived from a run or group path under results/logs."""
+    group, condition = split_run_path(rel)
+    leaf = (group or condition or rel).rstrip("/").split("/")[-1]
+    parsed = parse_group_leaf(leaf)
+    backend = _CONDITION_BACKEND.get(condition) or parsed["backend"]
+    disclosure = _CONDITION_DISCLOSURE.get(condition) or parsed["disclosure"]
+    benchmark = parsed["benchmark"]
+    heading_leaf = group.split("/")[-1] if group else leaf
+    return {
+        "group": group or None,
+        "condition": condition or None,
+        "benchmark": benchmark,
+        "benchmark_label": bench_label(benchmark) if benchmark else None,
+        "backend": backend,
+        "backend_label": BACKEND_LABELS.get(backend) if backend else None,
+        "disclosure": disclosure,
+        "disclosure_label": DISCLOSURE_LABELS.get(disclosure) if disclosure else None,
+        "axis": parsed["axis"],
+        "heading": _group_heading(heading_leaf, parsed),
+    }
+
+
+def classify_group(name: str) -> dict:
+    """Filter fields for a comparison-group directory (no condition folder)."""
+    leaf = name.rstrip("/").split("/")[-1]
+    parsed = parse_group_leaf(leaf)
+    return {
+        "group": name,
+        "condition": None,
+        "benchmark": parsed["benchmark"],
+        "benchmark_label": bench_label(parsed["benchmark"]) if parsed["benchmark"] else None,
+        "backend": parsed["backend"],
+        "backend_label": BACKEND_LABELS.get(parsed["backend"]) if parsed["backend"] else None,
+        "disclosure": parsed["disclosure"],
+        "disclosure_label": DISCLOSURE_LABELS.get(parsed["disclosure"]) if parsed["disclosure"] else None,
+        "axis": parsed["axis"],
+        "heading": _group_heading(leaf, parsed),
+    }
+
+
+def _group_heading(leaf: str, parsed: dict) -> str:
+    bench = bench_label(parsed["benchmark"]) if parsed["benchmark"] else leaf.replace("-", " ")
+    if parsed.get("seed") is not None:
+        return f"{bench} · seed {parsed['seed']}"
+    if parsed.get("context") == "domain":
+        return f"{bench} · domain context"
+    if parsed.get("context") == "generic":
+        return f"{bench} · generic context"
+    if parsed.get("context") == "misleading":
+        return f"{bench} · misleading prior"
+    if parsed["axis"] == "disclosure":
+        return f"{bench} · disclosure"
+    if parsed["disclosure"] == "shifted":
+        return f"{bench} · revealed+shifted"
+    if parsed["disclosure"] == "revealed":
+        return f"{bench} · revealed"
+    if parsed["disclosure"] == "blind":
+        return f"{bench} · blind"
+    return bench

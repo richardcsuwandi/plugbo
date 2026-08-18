@@ -19,7 +19,6 @@ from gpytorch.kernels import Kernel, MaternKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.utils.warnings import GPInputWarning
 
-from . import cake
 from .space import DTYPE, Encoder
 from .state import Frame
 
@@ -52,7 +51,9 @@ def fit_gp(X: torch.Tensor, y: torch.Tensor, bounds: torch.Tensor, covar_module:
         outcome_transform=Standardize(m=1),
     )
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    fit_gpytorch_mll(mll)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit_gpytorch_mll(mll)
     return model
 
 
@@ -94,7 +95,12 @@ class ModelSet:
 
 
 def _covar_for_metric(frame: Frame, d: int, metric: str) -> Kernel | None:
-    """Per-metric CAKE kernel when a population exists for that metric."""
+    """Per-metric CAKE kernel when a population exists for that metric.
+
+    Lazy-import cake to avoid a circular import (models -> cake -> acquisition -> models).
+    """
+    from . import cake
+
     return cake.covar_module_for_metric(frame, d, metric)
 
 
@@ -103,7 +109,7 @@ def build_model_set(frame: Frame, encoder: Encoder) -> ModelSet:
     if len(observed) < MIN_POINTS:
         raise ModelError("need observed trials")
 
-    X = torch.stack([encoder.encode(t.config) for t in observed])
+    X = encoder.stack_features(observed)
 
     obj_models: dict[str, SingleTaskGP] = {}
     con_models: dict[str, SingleTaskGP] = {}

@@ -181,6 +181,20 @@ class Encoder:
                 x[sl] = onehot
         return x
 
+    def features_from(self, config: dict, x_gp: list[float] | None = None) -> torch.Tensor:
+        """GP-space vector for a trial. Prefer the pre-projection proposal `x_gp`
+        when present so mixed int/choice studies can fit in the continuous
+        relaxation; `decode` is applied only when the oracle is queried.
+        """
+        if x_gp is not None:
+            x = torch.tensor(x_gp, dtype=DTYPE).reshape(-1)
+            if x.numel() == self.d and bool(torch.isfinite(x).all()):
+                return torch.clamp(x, self.domain_bounds[0], self.domain_bounds[1])
+        return self.encode(config)
+
+    def stack_features(self, trials) -> torch.Tensor:
+        return torch.stack([self.features_from(t.config, getattr(t, "x_gp", None)) for t in trials])
+
     def decode(self, x: torch.Tensor) -> dict:
         config: dict[str, Any] = {}
         for name, dim in self.space.dims.items():

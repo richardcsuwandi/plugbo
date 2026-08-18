@@ -5,7 +5,6 @@ const state = {
   current: null, // detail of the single run being viewed
   activeTab: "overview",
   selected: new Set(), // run names checked for compare
-  searchQuery: "",
   mode: "empty", // "empty" | "single" | "compare" | "experiment"
   sidebarMode: "runs", // "runs" | "experiments"
   compareGroups: [],
@@ -14,9 +13,20 @@ const state = {
   currentGroup: null, // name of selected comparison group
   groupDetail: null,
   pendingExperiments: false,
+  filters: {
+    q: "",
+  },
 };
 
 const CAT_COLORS = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-6", "--cat-7", "--cat-8"];
+const BACKEND_COLORS = {
+  vanilla: "--cat-4",
+  cake: "--cat-1",
+  "sara-lenz": "--cat-3",
+  "sara-lenz-cake": "--cat-7",
+  "sara-cake": "--cat-7",
+  "sara-only": "--cat-5",
+};
 
 // -- theme -------------------------------------------------------------
 
@@ -56,16 +66,53 @@ function hashString(s) {
   return Math.abs(h);
 }
 
+function preferredColorVar(name) {
+  const key = String(name || "");
+  if (BACKEND_COLORS[key]) return BACKEND_COLORS[key];
+  const leaf = key.split("/").filter(Boolean).pop();
+  return BACKEND_COLORS[leaf] || null;
+}
+
+function colorMapFor(names) {
+  const unique = [];
+  const seen = new Set();
+  for (const name of names) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    unique.push(name);
+  }
+  const assigned = new Map();
+  const used = new Set();
+  for (const name of unique) {
+    const pref = preferredColorVar(name);
+    if (pref && !used.has(pref)) {
+      used.add(pref);
+      assigned.set(name, pref);
+    }
+  }
+  for (const name of unique) {
+    if (assigned.has(name)) continue;
+    const start = hashString(name) % CAT_COLORS.length;
+    let chosen = CAT_COLORS[start];
+    for (let i = 0; i < CAT_COLORS.length; i++) {
+      const c = CAT_COLORS[(start + i) % CAT_COLORS.length];
+      if (!used.has(c)) {
+        chosen = c;
+        break;
+      }
+    }
+    used.add(chosen);
+    assigned.set(name, chosen);
+  }
+  return (name) => `var(${assigned.get(name) || CAT_COLORS[hashString(name || "") % CAT_COLORS.length]})`;
+}
+
 function colorForRun(name) {
-  return `var(${CAT_COLORS[hashString(name) % CAT_COLORS.length]})`;
+  return colorMapFor([name])(name);
 }
 
 function colorForCondition(label) {
   return colorForRun(label);
-}
-
-function colorForCallType(name) {
-  return `var(${CAT_COLORS[hashString("calltype:" + name) % CAT_COLORS.length]})`;
 }
 
 function hideAllMainViews() {
@@ -126,6 +173,157 @@ function fmtDuration(seconds) {
   if (m < 60) return `${m}m ${s}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
+}
+
+function tokenize(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/([a-z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-z])/g, "$1 $2")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function queryMatches(query, parts) {
+  const q = String(query || "").trim();
+  if (!q) return true;
+  const raw = parts.filter(Boolean).join(" ").toLowerCase();
+  if (raw.includes(q.toLowerCase())) return true;
+  const hayTokens = tokenize(raw);
+  const hayJoined = hayTokens.join(" ");
+  return tokenize(q).every((tok) => hayJoined.includes(tok) || hayTokens.some((t) => t.startsWith(tok)));
+}
+
+function statusSearchTerms(status) {
+  if (status === "running") return ["running", "live"];
+  if (status === "failed") return ["failed", "fail", "error"];
+  if (status === "completed") return ["completed", "done", "finished"];
+  return status ? [status] : [];
+}
+
+function extraNicknames(obj) {
+  const extra = [];
+  if (obj.benchmark === "bolt_lora") extra.push("hpo", "lora", "finetune");
+  if ((obj.backend || "").includes("sara") || (obj.backends || []).some((b) => String(b).includes("sara"))) {
+    extra.push("agent", "llm");
+  }
+  if (obj.disclosure === "revealed") extra.push("noblind");
+  return extra;
+}
+
+function runSearchParts(run) {
+  return [
+    run.name,
+    run.name.replace(/[/_\-]+/g, " "),
+    run.heading,
+    run.benchmark,
+    run.benchmark_label,
+    run.backend,
+    run.backend_label,
+    run.disclosure,
+    run.disclosure_label,
+    run.condition,
+    run.model,
+    run.run_kind,
+    run.surrogate,
+    ...statusSearchTerms(run.status),
+    ...extraNicknames(run),
+  ];
+}
+
+function groupSearchParts(g) {
+  return [
+    g.name,
+    g.name.replace(/[/_\-]+/g, " "),
+    g.title,
+    g.heading,
+    g.caption,
+    g.benchmark,
+    g.benchmark_label,
+    ...(g.backends || []),
+    ...(g.disclosures || []),
+    ...(g.statuses || []).flatMap(statusSearchTerms),
+    ...extraNicknames(g),
+  ];
+}
+
+function runMatches(run) {
+  return queryMatches(state.filters.q, runSearchParts(run));
+}
+
+function groupMatches(g) {
+  return queryMatches(state.filters.q, groupSearchParts(g));
+}
+
+function filtersActive() {
+  return Boolean(state.filters.q && state.filters.q.trim());
+}
+
+function dateBucket(iso) {
+  const epoch = isoToEpoch(iso);
+  if (!epoch) return { key: "unknown", label: "", order: 1e12 };
+  const day = new Date(epoch * 1000);
+  day.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((today.getTime() - day.getTime()) / 86400000);
+  const key = String(day.getTime());
+  if (diffDays === 0) return { key, label: "Today", order: 0 };
+  if (diffDays === 1) return { key, label: "Yesterday", order: 1 };
+  const label = day.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+  return { key, label, order: diffDays };
+}
+
+function appendDateSections(list, items, isoOf, renderItem) {
+  const buckets = new Map();
+  for (const item of items) {
+    const b = dateBucket(isoOf(item));
+    if (!buckets.has(b.key)) buckets.set(b.key, { label: b.label, order: b.order, items: [] });
+    buckets.get(b.key).items.push(item);
+  }
+  const ordered = [...buckets.values()].sort((a, b) => a.order - b.order);
+  for (const bucket of ordered) {
+    bucket.items.sort((a, b) => (isoToEpoch(isoOf(b)) || 0) - (isoToEpoch(isoOf(a)) || 0));
+    if (bucket.label) {
+      const header = document.createElement("li");
+      header.className = "date-header";
+      header.textContent = bucket.label;
+      list.appendChild(header);
+    }
+    for (const item of bucket.items) list.appendChild(renderItem(item));
+  }
+}
+
+function writeFiltersToUrl() {
+  const url = new URL(location.href);
+  if (state.filters.q) url.searchParams.set("q", state.filters.q);
+  else url.searchParams.delete("q");
+  ["status", "bench", "backend", "disclosure", "when", "from", "to", "view"].forEach((k) => url.searchParams.delete(k));
+  history.replaceState(null, "", url.pathname + url.search + url.hash);
+}
+
+function readFiltersFromUrl() {
+  const p = new URLSearchParams(location.search);
+  state.filters.q = p.get("q") || "";
+  const search = document.getElementById("search-input");
+  if (search) search.value = state.filters.q;
+}
+
+function renderFilterBar() {
+  const visible =
+    state.sidebarMode === "experiments"
+      ? state.compareGroups.filter(groupMatches).length
+      : state.runs.filter(runMatches).length;
+  const total = state.sidebarMode === "experiments" ? state.compareGroups.length : state.runs.length;
+  document.getElementById("filter-count").textContent = total ? `${visible}/${total}` : "";
+  document.getElementById("filter-clear").hidden = !filtersActive();
+}
+
+function applyFilters() {
+  renderFilterBar();
+  renderSidebar();
+  renderExperimentList();
+  writeFiltersToUrl();
 }
 
 const LENZ_COMMAND_RE = /\blenz\s+([a-z-]+)/;
@@ -219,9 +417,18 @@ function openExperimentsView() {
     showEmptyMain();
     return;
   }
-  const target = state.currentGroup && state.compareGroups.some((g) => g.name === state.currentGroup)
-    ? state.currentGroup
-    : state.compareGroups[0].name;
+  const visible = state.compareGroups.filter(groupMatches);
+  const target =
+    state.currentGroup && visible.some((g) => g.name === state.currentGroup)
+      ? state.currentGroup
+      : visible[0]
+        ? visible[0].name
+        : null;
+  if (!target) {
+    showEmptyMain();
+    document.getElementById("empty-main").textContent = "No experiments match.";
+    return;
+  }
   selectCompareGroup(target);
 }
 
@@ -244,50 +451,54 @@ function showExperimentError(message) {
 }
 
 function renderGroupPicker() {
-  const select = document.getElementById("group-select");
+  renderFilterBar();
+  renderExperimentList();
+}
+
+function renderExperimentList() {
+  const list = document.getElementById("experiment-list");
   const empty = document.getElementById("group-empty");
-  const wrap = document.getElementById("group-picker-wrap");
+  if (!list) return;
+  list.innerHTML = "";
   if (state.compareGroupsLoading) {
-    wrap.style.display = "flex";
     empty.style.display = "none";
-    select.disabled = true;
-    select.innerHTML = '<option value="">Loading…</option>';
-    document.getElementById("group-meta").textContent = "";
+    list.innerHTML = '<li class="empty-note sidebar-empty">Loading…</li>';
     return;
   }
-  select.disabled = false;
   if (state.compareGroupsError) {
-    wrap.style.display = "flex";
     empty.style.display = "none";
-    select.innerHTML = `<option value="">Unavailable</option>`;
-    document.getElementById("group-meta").textContent = state.compareGroupsError;
+    list.innerHTML = `<li class="empty-note sidebar-empty">${escapeHtml(state.compareGroupsError)}</li>`;
     return;
   }
   if (!state.compareGroups.length) {
-    wrap.style.display = "none";
     empty.style.display = "block";
     return;
   }
-  wrap.style.display = "flex";
   empty.style.display = "none";
-  const prev = state.currentGroup;
-  select.innerHTML = state.compareGroups
-    .map((g) => {
-      const pending = g.n_scored < g.n_conditions ? ` · ${g.n_scored}/${g.n_conditions}` : "";
-      return `<option value="${escapeHtml(g.name)}" ${g.name === prev ? "selected" : ""}>${escapeHtml(g.name)}${pending}</option>`;
-    })
-    .join("");
-  updateGroupMeta();
-}
-
-function updateGroupMeta() {
-  const meta = document.getElementById("group-meta");
-  const g = state.compareGroups.find((x) => x.name === state.currentGroup);
-  if (!g || g.n_scored >= g.n_conditions) {
-    meta.textContent = "";
+  const visible = state.compareGroups.filter(groupMatches);
+  if (!visible.length) {
+    list.innerHTML = '<li class="empty-note sidebar-empty">No experiments match.</li>';
     return;
   }
-  meta.textContent = `${g.n_scored}/${g.n_conditions} ready`;
+  const colorOf = colorMapFor(visible.map((g) => g.name));
+  appendDateSections(list, visible, (g) => g.started_at, (g) => makeExperimentItem(g, colorOf(g.name)));
+}
+
+function makeExperimentItem(g, color) {
+  const li = document.createElement("li");
+  li.className = "run-item" + (g.name === state.currentGroup ? " active" : "");
+  li.dataset.name = g.name;
+  const pending = g.n_scored < g.n_conditions ? `${g.n_scored}/${g.n_conditions} ready` : `${g.n_conditions} conditions`;
+  const rel = relativeTime(isoToEpoch(g.started_at));
+  const meta = [pending, rel].filter(Boolean);
+  li.innerHTML = `
+      <span class="run-dot" style="background:${color || colorForRun(g.name)}"></span>
+      <div class="run-body">
+        <div class="run-name" title="${escapeHtml(g.name)}">${escapeHtml(g.heading || g.name)}</div>
+        <div class="run-meta">${meta.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('<span class="sep">·</span>')}</div>
+      </div>`;
+  li.addEventListener("click", () => selectCompareGroup(g.name));
+  return li;
 }
 
 function initSidebarNav() {
@@ -297,9 +508,6 @@ function initSidebarNav() {
       if (mode === state.sidebarMode) return;
       setSidebarMode(mode);
     });
-  });
-  document.getElementById("group-select").addEventListener("change", (e) => {
-    selectCompareGroup(e.target.value);
   });
 }
 
@@ -315,6 +523,7 @@ function applySidebarModeUI(mode) {
 function setSidebarMode(mode) {
   if (mode === state.sidebarMode) return;
   applySidebarModeUI(mode);
+  renderFilterBar();
   if (mode === "experiments") {
     openExperimentsView();
   } else if (state.mode === "experiment") {
@@ -325,10 +534,9 @@ function setSidebarMode(mode) {
 async function selectCompareGroup(name) {
   if (!name) return;
   state.currentGroup = name;
-  document.querySelectorAll(".run-item").forEach((el) => el.classList.remove("active"));
-  const select = document.getElementById("group-select");
-  if (select.value !== name) select.value = name;
-  updateGroupMeta();
+  document.querySelectorAll("#experiment-list .run-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.name === name);
+  });
   const url = new URL(location.href);
   url.searchParams.delete("compare");
   url.searchParams.set("group", name);
@@ -350,6 +558,7 @@ async function selectCompareGroup(name) {
 async function loadRuns() {
   const res = await fetch("/api/runs");
   state.runs = await res.json();
+  renderFilterBar();
   renderSidebar();
 }
 
@@ -359,6 +568,51 @@ function statusBadge(run) {
   const cls = `status-${status}`;
   const pulse = status === "running" ? '<span class="status-pulse"></span> ' : "";
   return `<span class="badge ${cls}">${pulse}${escapeHtml(status)}</span>`;
+}
+
+function runTitle(run) {
+  const backend = run.backend_label || run.condition || "";
+  const bench = run.benchmark_label || "";
+  if (backend && bench) return `${backend} · ${bench}`;
+  if (run.heading) return run.heading;
+  if (backend) return backend;
+  if (bench) return bench;
+  const parts = String(run.name || "")
+    .split("/")
+    .filter((p) => p && !p.startsWith("sandbox_"));
+  return parts.slice(-2).join(" / ") || run.name;
+}
+
+function makeRunItem(run, color) {
+  const li = document.createElement("li");
+  li.className = "run-item";
+  li.dataset.name = run.name;
+  const rel = relativeTime(isoToEpoch(run.started_at));
+  const meta = [run.disclosure_label, `${run.n_observed}/${run.n_trials}`, rel].filter(Boolean);
+  const badges = [
+    statusBadge(run),
+    run.surrogate === "cake" ? '<span class="badge cake">CAKE</span>' : "",
+    run.is_moo ? '<span class="badge">MOO</span>' : "",
+    run.run_kind === "lenz" ? '<span class="badge">lenz-only</span>' : "",
+  ].filter(Boolean);
+  li.innerHTML = `
+      <input type="checkbox" class="run-check" title="Select for compare" ${state.selected.has(run.name) ? "checked" : ""} />
+      <span class="run-dot" style="background:${color || colorForRun(run.name)}"></span>
+      <div class="run-body">
+        <div class="run-name" title="${escapeHtml(run.name)}">${escapeHtml(runTitle(run))}</div>
+        <div class="run-meta">${meta.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('<span class="sep">·</span>')}${badges.length ? badges.join("") : ""}</div>
+      </div>
+      <button class="run-delete" title="Delete this run">🗑</button>`;
+  li.querySelector(".run-check").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSelect(run.name, e.target.checked);
+  });
+  li.querySelector(".run-delete").addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteRun(run.name);
+  });
+  li.addEventListener("click", () => selectRun(run.name));
+  return li;
 }
 
 function renderSidebar() {
@@ -371,42 +625,13 @@ function renderSidebar() {
   }
   empty.style.display = "none";
 
-  const q = state.searchQuery.toLowerCase();
-  for (const run of state.runs) {
-    const matches = !q || run.name.toLowerCase().includes(q) || (run.model || "").toLowerCase().includes(q);
-    const li = document.createElement("li");
-    li.className = "run-item" + (matches ? "" : " hidden");
-    li.dataset.name = run.name;
-    const rel = relativeTime(isoToEpoch(run.started_at));
-    li.innerHTML = `
-      <input type="checkbox" class="run-check" title="Select for compare" ${state.selected.has(run.name) ? "checked" : ""} />
-      <span class="run-dot" style="background:${colorForRun(run.name)}"></span>
-      <div class="run-body">
-        <div class="run-name">${escapeHtml(run.name)}</div>
-        <div class="run-meta">
-          ${run.model ? `<span>${escapeHtml(run.model)}</span><span class="sep">·</span>` : ""}
-          <span>${run.n_observed}/${run.n_trials} evals</span>
-          ${rel ? `<span class="sep">·</span><span>${rel}</span>` : ""}
-        </div>
-        <div class="run-meta">
-          ${statusBadge(run)}
-          ${run.surrogate === "cake" ? '<span class="badge cake">CAKE</span>' : ""}
-          ${run.is_moo ? '<span class="badge">MOO</span>' : ""}
-          ${run.run_kind === "lenz" ? '<span class="badge">lenz-only</span>' : ""}
-        </div>
-      </div>
-      <button class="run-delete" title="Delete this run">🗑</button>`;
-    li.querySelector(".run-check").addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleSelect(run.name, e.target.checked);
-    });
-    li.querySelector(".run-delete").addEventListener("click", (e) => {
-      e.stopPropagation();
-      deleteRun(run.name);
-    });
-    li.addEventListener("click", () => selectRun(run.name));
-    list.appendChild(li);
+  const visible = state.runs.filter(runMatches);
+  if (!visible.length) {
+    list.innerHTML = '<li class="empty-note sidebar-empty">No runs match.</li>';
+    return;
   }
+  const colorOf = colorMapFor(visible.map((run) => run.name));
+  appendDateSections(list, visible, (run) => run.started_at, (run) => makeRunItem(run, colorOf(run.name)));
 }
 
 function toggleSelect(name, checked) {
@@ -444,8 +669,13 @@ async function deleteRun(name) {
 
 function initSearchAndCompare() {
   document.getElementById("search-input").addEventListener("input", (e) => {
-    state.searchQuery = e.target.value;
-    renderSidebar();
+    state.filters.q = e.target.value;
+    applyFilters();
+  });
+  document.getElementById("filter-clear").addEventListener("click", () => {
+    state.filters.q = "";
+    document.getElementById("search-input").value = "";
+    applyFilters();
   });
   document.getElementById("compare-clear").addEventListener("click", () => {
     state.selected.clear();
@@ -468,11 +698,11 @@ function initSearchAndCompare() {
 
 async function selectRun(name) {
   applySidebarModeUI("runs");
-  document.querySelectorAll(".run-item").forEach((el) => el.classList.toggle("active", el.dataset.name === name));
+  document.querySelectorAll("#run-list .run-item").forEach((el) => el.classList.toggle("active", el.dataset.name === name));
   const url = new URL(location.href);
   url.searchParams.delete("group");
   url.searchParams.delete("compare");
-  history.replaceState(null, "", `#${encodeURIComponent(name)}|${state.activeTab}`);
+  history.replaceState(null, "", `${url.pathname}${url.search}#${encodeURIComponent(name)}|${state.activeTab}`);
   const res = await fetch(`/api/runs/${encodeURIComponent(name)}`);
   const detail = await res.json();
   state.current = detail;
@@ -707,8 +937,9 @@ function renderConfig(detail) {
 
 // -- convergence chart (single series or overlaid comparison) -------------------------------------------------------------
 
-function renderChart(container, series) {
+function renderChart(container, series, colorOf) {
   // series: [{name, convergence: {metric, minimize, points}}]
+  colorOf = colorOf || (series.length > 1 ? colorMapFor(series.map((s) => s.name)) : () => "var(--series-1)");
   function draw() {
     const W = container.clientWidth || 600;
     const H = 280;
@@ -749,7 +980,7 @@ function renderChart(container, series) {
     let seriesSvg = "";
     for (const s of series) {
       const pts = s.convergence.points;
-      const color = series.length > 1 ? colorForRun(s.name) : "var(--series-1)";
+      const color = series.length > 1 ? colorOf(s.name) : "var(--series-1)";
       const path = pts.map((p, idx) => `${idx === 0 ? "M" : "L"}${xScale(p.i)},${yScale(p.best)}`).join(" ");
       const dots = series.length > 1 ? "" : pts.map((p) => `<circle class="raw-dot" cx="${xScale(p.i)}" cy="${yScale(p.value)}" r="3"></circle>`).join("");
       seriesSvg += `${dots}<path fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="${path}"></path>`;
@@ -787,7 +1018,7 @@ function renderChart(container, series) {
             nearest = p;
           }
         }
-        const color = series.length > 1 ? colorForRun(s.name) : "var(--series-1)";
+        const color = series.length > 1 ? colorOf(s.name) : "var(--series-1)";
         dotsHtml += `<circle class="hover-dot" cx="${xScale(nearest.i)}" cy="${yScale(nearest.best)}" r="4.5" style="fill:${color}"></circle>`;
         tipRows += `<div><span style="color:${color}">●</span> ${series.length > 1 ? escapeHtml(s.name) + ": " : ""}${fmtNum(nearest.best)} <span style="color:var(--text-muted)">(eval ${nearest.i})</span></div>`;
       }
@@ -818,7 +1049,7 @@ function renderChart(container, series) {
   if (legend) {
     if (series.length > 1) {
       legend.innerHTML = series
-        .map((s) => `<div class="legend-item"><span class="legend-swatch" style="background:${colorForRun(s.name)}"></span>${escapeHtml(s.name)}</div>`)
+        .map((s) => `<div class="legend-item"><span class="legend-swatch" style="background:${colorOf(s.name)}"></span>${escapeHtml(s.name)}</div>`)
         .join("");
     } else {
       legend.innerHTML = `
@@ -957,6 +1188,7 @@ function renderToolUse(detail) {
   for (const e of events) totals.set(e.call_type, (totals.get(e.call_type) || 0) + 1);
   // stacking + legend order: most-used call type first (drawn at the bottom of the stack)
   const callTypes = [...totals.keys()].sort((a, b) => totals.get(b) - totals.get(a));
+  const colorOf = colorMapFor(callTypes);
 
   const bins = binToolUseEvents(events, TOOL_USE_BINS);
   const nonEmpty = bins
@@ -984,7 +1216,7 @@ function renderToolUse(detail) {
     .map((ct) => {
       const count = totals.get(ct);
       const pct = ((100 * count) / events.length).toFixed(1);
-      return `<tr><td><span class="legend-swatch" style="background:${colorForCallType(ct)};display:inline-block;margin-right:6px"></span><span class="mono">${escapeHtml(ct)}</span></td><td>${count}</td><td>${pct}%</td></tr>`;
+      return `<tr><td><span class="legend-swatch" style="background:${colorOf(ct)};display:inline-block;margin-right:6px"></span><span class="mono">${escapeHtml(ct)}</span></td><td>${count}</td><td>${pct}%</td></tr>`;
     })
     .join("");
 
@@ -1075,7 +1307,7 @@ function renderToolUse(detail) {
     callTypes.forEach((ct, idx) => {
       const top = stacks.map((s) => `${xScale(s.x)},${yScale(s.layers[idx].y1)}`).join(" L");
       const bottom = [...stacks].reverse().map((s) => `${xScale(s.x)},${yScale(s.layers[idx].y0)}`).join(" L");
-      areas += `<path d="M${top} L${bottom} Z" fill="${colorForCallType(ct)}" opacity="0.85"></path>`;
+      areas += `<path d="M${top} L${bottom} Z" fill="${colorOf(ct)}" opacity="0.85"></path>`;
     });
 
     let gridlines = "";
@@ -1127,7 +1359,7 @@ function renderToolUse(detail) {
           const layer = nearest.layers[idx];
           const pct = ((layer.y1 - layer.y0) * 100).toFixed(0);
           if (pct === "0") return "";
-          return `<div><span style="color:${colorForCallType(ct)}">●</span> ${escapeHtml(ct)}: ${pct}%</div>`;
+          return `<div><span style="color:${colorOf(ct)}">●</span> ${escapeHtml(ct)}: ${pct}%</div>`;
         })
         .join("");
       tooltip.style.display = "block";
@@ -1154,7 +1386,7 @@ function renderToolUse(detail) {
   }
 
   document.getElementById("tool-use-legend").innerHTML = callTypes
-    .map((ct) => `<div class="legend-item"><span class="legend-swatch" style="background:${colorForCallType(ct)}"></span>${escapeHtml(ct)} (${totals.get(ct)})</div>`)
+    .map((ct) => `<div class="legend-item"><span class="legend-swatch" style="background:${colorOf(ct)}"></span>${escapeHtml(ct)} (${totals.get(ct)})</div>`)
     .join("");
 }
 
@@ -1237,13 +1469,14 @@ async function renderCompare() {
   const names = [...state.selected];
   const details = await Promise.all(names.map((n) => fetch(`/api/runs/${encodeURIComponent(n)}`).then((r) => r.json())));
   const withConv = details.filter((d) => d.convergence && d.convergence.points.length >= 2);
+  const colorOf = colorMapFor(details.map((d) => d.name));
 
   const rows = details
     .map((d) => {
       const best = d.convergence && d.convergence.points.length ? d.convergence.points[d.convergence.points.length - 1].best : null;
       const nObs = (d.state.trials || []).filter((t) => t.status === "observed").length;
       return `<tr>
-        <td><span class="run-dot" style="background:${colorForRun(d.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(d.name)}</td>
+        <td><span class="run-dot" style="background:${colorOf(d.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(d.name)}</td>
         <td class="mono">${escapeHtml((d.meta && d.meta.model) || "—")}</td>
         <td>${nObs}</td>
         <td>${fmtNum(best)}</td>
@@ -1274,7 +1507,8 @@ async function renderCompare() {
   if (withConv.length >= 1) {
     renderChart(
       document.getElementById("chart-wrap"),
-      withConv.map((d) => ({ name: d.name, convergence: d.convergence }))
+      withConv.map((d) => ({ name: d.name, convergence: d.convergence })),
+      colorOf
     );
   }
 }
@@ -1285,9 +1519,36 @@ function withEvalZero(trace) {
   return [Infinity, ...trace];
 }
 
-function renderRegretChart(container, traces) {
+function legendOrigin(corner, x0, y1, x1, y0, legendW, legendH, inset = 4) {
+  const left = corner[1] === "l" ? x0 + inset : x1 - legendW - inset;
+  const top = corner[0] === "t" ? y1 + inset : y0 - legendH - inset;
+  return { left, top };
+}
+
+function pickLegendBox(points, x0, y1, x1, y0, legendW, legendH, inset = 4) {
+  const order = ["tr", "bl", "br", "tl"];
+  let best = order[0];
+  let bestHits = Infinity;
+  for (const corner of order) {
+    const { left, top } = legendOrigin(corner, x0, y1, x1, y0, legendW, legendH, inset);
+    const right = left + legendW;
+    const bottom = top + legendH;
+    let hits = 0;
+    for (const [x, y] of points) {
+      if (x >= left && x <= right && y >= top && y <= bottom) hits += 1;
+    }
+    if (hits < bestHits) {
+      best = corner;
+      bestHits = hits;
+    }
+  }
+  return legendOrigin(best, x0, y1, x1, y0, legendW, legendH, inset);
+}
+
+function renderRegretChart(container, traces, colorOf) {
   const labels = Object.keys(traces);
   if (!labels.length) return;
+  colorOf = colorOf || colorMapFor(labels);
 
   function draw() {
     const W = container.clientWidth || 820;
@@ -1331,10 +1592,10 @@ function renderRegretChart(container, traces) {
       const trace = traces[label];
       const nObs = trace.length;
       const evalNote = nObs < nMax - 1 ? `, ${nObs} eval${nObs === 1 ? "" : "s"}` : "";
-      legendRows.push({ label, text: `${label} (best ${fmtNum(trace[trace.length - 1], 4)}${evalNote})`, color: colorForCondition(label) });
+      legendRows.push({ label, text: `${label} (best ${fmtNum(trace[trace.length - 1], 4)}${evalNote})`, color: colorOf(label) });
       const padded = padTrace(plotTraces[label]);
       const pts = padded.map((v, j) => `${X(j)},${Y(v)}`).join(" ");
-      const color = colorForCondition(label);
+      const color = colorOf(label);
       seriesSvg += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"></polyline>`;
       const mx = X(nObs);
       const my = Y(trace[trace.length - 1]);
@@ -1346,9 +1607,13 @@ function renderRegretChart(container, traces) {
     const legendPad = 6;
     const legendW = 300;
     const legendH = legendRows.length * legendRowH + legendPad * 2;
-    const legendTop = y1 + 4;
-    const legendLeft = x1 - legendW - legendPad;
-    let legendSvg = `<rect x="${legendLeft}" y="${legendTop}" width="${legendW + legendPad}" height="${legendH}" rx="4" fill="var(--text-primary)" fill-opacity="0.08" stroke="var(--border)"></rect>`;
+    const boxW = legendW + legendPad;
+    const curvePts = [];
+    for (const label of labels) {
+      for (const [j, v] of padTrace(plotTraces[label]).entries()) curvePts.push([X(j), Y(v)]);
+    }
+    const { left: legendLeft, top: legendTop } = pickLegendBox(curvePts, x0, y1, x1, y0, boxW, legendH);
+    let legendSvg = `<rect x="${legendLeft}" y="${legendTop}" width="${boxW}" height="${legendH}" rx="4" fill="var(--text-primary)" fill-opacity="0.08" stroke="var(--border)"></rect>`;
     legendRows.forEach((row, i) => {
       const cy = legendTop + legendPad + i * legendRowH + legendRowH / 2;
       legendSvg += `<circle cx="${legendLeft + legendPad}" cy="${cy}" r="4" fill="${row.color}"></circle>`;
@@ -1383,7 +1648,7 @@ function renderRegretChart(container, traces) {
         const trace = plotTraces[label];
         const idx = Math.min(clamped, trace.length - 1);
         const v = trace[idx];
-        const color = colorForCondition(label);
+        const color = colorOf(label);
         dots += `<circle class="hover-dot" cx="${X(clamped)}" cy="${Y(v)}" r="4.5" style="fill:${color}"></circle>`;
         const shown = Number.isFinite(v) ? fmtNum(v) : "—";
         tipRows += `<div><span style="color:${color}">●</span> ${escapeHtml(label)}: ${shown}</div>`;
@@ -1431,12 +1696,17 @@ function renderExperimentCompare(detail) {
     status: "complete",
   }));
 
+  const colorOf = colorMapFor([
+    ...conditions.map((c) => c.name),
+    ...Object.keys(traces),
+  ]);
+
   const rows = conditions
     .map((c) => {
       const evals =
         c.budget != null ? `${c.n_evals}/${c.budget}` : String(c.n_evals);
       return `<tr>
-        <td><span class="run-dot" style="background:${colorForCondition(c.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(c.name)}</td>
+        <td><span class="run-dot" style="background:${colorOf(c.name)};display:inline-block;margin-top:0"></span> ${escapeHtml(c.name)}</td>
         <td class="mono">${fmtNum(c.regret_eval1, 4)}</td>
         <td class="mono">${fmtNum(c.best_regret, 6)}</td>
         <td>${escapeHtml(evals)}</td>
@@ -1479,7 +1749,7 @@ function renderExperimentCompare(detail) {
 
   document.getElementById("refresh-group-btn")?.addEventListener("click", () => selectCompareGroup(detail.name));
 
-  if (conditions.length) renderRegretChart(document.getElementById("regret-chart-wrap"), traces);
+  if (conditions.length) renderRegretChart(document.getElementById("regret-chart-wrap"), traces, colorOf);
 }
 
 // -- boot -------------------------------------------------------------
@@ -1489,6 +1759,8 @@ initSearchAndCompare();
 initSidebarNav();
 renderGroupPicker();
 Promise.all([loadRuns(), loadCompareGroups()]).then(() => {
+  readFiltersFromUrl();
+  applyFilters();
   const params = new URLSearchParams(location.search);
   const groupParam = params.get("group");
   const compareParam = params.get("compare");
