@@ -138,7 +138,7 @@ def _one_pdf(frame: Frame, name: str, value, spec: dict) -> float:
         return float(Beta(a, b).log_prob(torch.tensor(u)).exp()) / max(width, 1e-12)
     if dist == "categorical":
         probs = spec.get("probs") or {}
-        return float(probs.get(value, PRIOR_FLOOR))
+        return float(probs.get(value, probs.get(str(value), PRIOR_FLOOR)))
     return 1.0
 
 

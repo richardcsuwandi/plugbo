@@ -9,6 +9,7 @@ import sys
 import time
 
 import pytest
+import torch
 
 from lenz import cake
 from lenz.space import Encoder, SearchSpace
@@ -210,6 +211,48 @@ def test_suggest_dispatches_to_baker_end_to_end():
 
     result = opt.suggest(frame, encoder, q=1)
     assert "kernel" in result[0]
+
+
+def test_baker_suggest_honors_turbo_bounds(monkeypatch):
+    from lenz import optimize as opt
+    from lenz.plugins.turbo import TurboPlugin
+
+    frame, encoder = _toy_frame(n=8)
+    cake.evolve_generation(frame, encoder, FakeClient(), "y")
+    frame.shelf.region = "turbo"
+    turbo = TurboPlugin()
+    turbo_state = turbo.ensure(frame, encoder)
+    turbo_state["length"] = 0.2
+    expected = turbo.active_bounds(frame, encoder)
+    seen = []
+
+    def fake_optimize_acqf(*, bounds, **kwargs):
+        seen.append(bounds.detach().clone())
+        return bounds.mean(dim=0, keepdim=True), None
+
+    monkeypatch.setattr(cake, "optimize_acqf", fake_optimize_acqf)
+    result = opt.suggest(frame, encoder, q=1)
+
+    assert seen
+    assert all(torch.equal(bounds, expected) for bounds in seen)
+    assert expected[0, 0] <= result[0]["config"]["x"] <= expected[1, 0]
+
+
+def test_baker_score_applies_pibo_prior():
+    from lenz import optimize as opt
+
+    frame, encoder = _toy_frame(n=8)
+    cake.evolve_generation(frame, encoder, FakeClient(), "y")
+    frame.shelf.prior = "pibo"
+    frame.plugins["pibo"] = {
+        "belief": {"x": {"dist": "normal", "mu": 0.3, "sigma": 0.03}},
+        "decay_beta": 20.0,
+        "t0": len(frame.observed_trials()),
+        "prior_floor": 1e-12,
+    }
+
+    scores = opt.score(frame, encoder, [{"x": 0.3}, {"x": 0.9}], ["noisy_logei"])
+    assert scores[0]["noisy_logei"] > scores[1]["noisy_logei"]
 
 
 def test_suggest_falls_back_when_cake_not_ready():

@@ -22,52 +22,57 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
-
 from .lenz_loop import create_and_warmup, evaluate, lenz, warmup_n
 from .obfuscate import ObfuscatedBenchmark
+from .priors import get_prior_fixture
 from .run_blind_test import score_sandbox
 from .sandbox import build_sandbox
 
 
-def _default_suggest(state_path: Path, sandbox: Path) -> dict:
-    return lenz(state_path, "suggest")[0]["config"]
-
-
 @dataclass
 class Policy:
-    """One scripted (non-agentic) BO configuration. `lenz_create_args` are
-    appended to `lenz create`; override `suggest` for a policy that doesn't
-    pick its next config via a plain `lenz suggest` call.
-    """
+    """Backward-compatible named configuration for the four plugin slots."""
 
     lenz_create_args: list[str] = field(default_factory=list)
-    suggest: Callable[[Path, Path], dict] = _default_suggest
+    surrogate: str = "fixed"
+    region: str = "box"
+    sampler: str = "botorch"
 
 
 # Add new baselines/configs here -- name -> Policy. Keep names CLI-friendly
 # (used as `--policy <name>`); they also become the run's log-dir suffix.
 POLICIES: dict[str, Policy] = {
-    "vanilla": Policy(lenz_create_args=["--acqf", "noisy_logei", "--surrogate", "fixed"]),
-    "sobol": Policy(lenz_create_args=["--acqf", "sobol", "--surrogate", "fixed"]),
+    "vanilla": Policy(lenz_create_args=["--acqf", "noisy_logei"]),
+    "sobol": Policy(lenz_create_args=["--acqf", "sobol"]),
     # Kernel evolution without an agent driving BO decisions -- still needs
     # --kernel-llm-provider/--kernel-llm-model on the CLI (cake's kernel
     # evolution makes its own small LLM calls independent of "no sara" here).
-    "cake": Policy(lenz_create_args=["--acqf", "noisy_logei", "--surrogate", "cake"]),
+    "cake": Policy(lenz_create_args=["--acqf", "noisy_logei"], surrogate="cake"),
+    "turbo": Policy(lenz_create_args=["--acqf", "noisy_logei"], region="turbo"),
 }
 
 
-def _turbo_suggest(state_path: Path, sandbox: Path) -> dict:
-    status = lenz(state_path, "status")
-    if status.get("region") != "turbo":
+def _configure_slots(
+    state_path: Path,
+    *,
+    region: str,
+    sampler: str,
+    prior: dict | None,
+    decay_beta: float,
+) -> None:
+    if region == "turbo":
         lenz(state_path, "set-region", "--policy", "turbo")
-    return lenz(state_path, "suggest")[0]["config"]
-
-
-POLICIES["turbo"] = Policy(
-    lenz_create_args=["--acqf", "noisy_logei", "--surrogate", "fixed"],
-    suggest=_turbo_suggest,
-)
+    if sampler == "llambo":
+        lenz(state_path, "set-sampler", "--sampler", "llambo")
+    if prior:
+        lenz(
+            state_path,
+            "set-belief",
+            "--prior",
+            json.dumps(prior),
+            "--decay-beta",
+            str(decay_beta),
+        )
 
 
 def run_blind_baseline(
@@ -80,6 +85,13 @@ def run_blind_baseline(
     warmup: int | None = None,
     reveal: bool = False,
     shift: bool = False,
+    context_variant: str = "domain",
+    surrogate: str | None = None,
+    region: str | None = None,
+    sampler: str | None = None,
+    prior: dict | None = None,
+    prior_fixture: str | None = None,
+    decay_beta: float = 10.0,
 ) -> dict:
     """`reveal`/`shift` exist for symmetry with `run_blind_test.py`/
     `run_noblind_test.py` -- a non-agentic policy never reads `context.md`,
@@ -91,7 +103,21 @@ def run_blind_baseline(
     under the same disclosure condition.
     """
     policy = POLICIES[policy_name]
-    built = build_sandbox(benchmark_name, root=root, seed=seed, reveal=reveal, shift=shift)
+    surrogate = surrogate or policy.surrogate
+    region = region or policy.region
+    sampler = sampler or policy.sampler
+    if prior is not None and prior_fixture is not None:
+        raise ValueError("pass either prior or prior_fixture, not both")
+    if prior_fixture is not None:
+        prior = get_prior_fixture(benchmark_name, prior_fixture)
+    built = build_sandbox(
+        benchmark_name,
+        root=root,
+        seed=seed,
+        reveal=reveal,
+        shift=shift,
+        context_variant=context_variant,
+    )
     sandbox: Path = built["sandbox"]
     state_path = sandbox / "state.json"
     oracle_path = sandbox / "oracle"
@@ -99,7 +125,11 @@ def run_blind_baseline(
     secret = json.loads(built["secret_path"].read_text())
     ob = ObfuscatedBenchmark.from_secret(secret)
 
-    create_args = list(policy.lenz_create_args) + ["--budget", str(budget)] + list(extra_create_args or [])
+    create_args = (
+        list(policy.lenz_create_args)
+        + ["--surrogate", surrogate, "--budget", str(budget)]
+        + list(extra_create_args or [])
+    )
     if seed is not None:
         create_args += ["--seed", str(seed)]
     if built["constraints"]:
@@ -107,6 +137,13 @@ def run_blind_baseline(
     n_warm = warmup_n(len(ob.param_names), seed, warmup)
     already = create_and_warmup(
         sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
+    )
+    _configure_slots(
+        state_path,
+        region=region,
+        sampler=sampler,
+        prior=prior,
+        decay_beta=decay_beta,
     )
 
     meta_path = sandbox / "run_meta.json"
@@ -116,6 +153,14 @@ def run_blind_baseline(
         "budget": budget,
         "seed": seed,
         "warmup": already,
+        "surrogate": surrogate,
+        "region": region,
+        "sampler": sampler,
+        "prior": "pibo" if prior else "none",
+        "prior_fixture": prior_fixture,
+        "prior_belief": prior,
+        "prior_decay_beta": decay_beta if prior else None,
+        "context_variant": context_variant,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "ended_at": None,
         "status": "running",
@@ -124,7 +169,7 @@ def run_blind_baseline(
 
     try:
         for i in range(already + 1, budget + 1):
-            config = policy.suggest(state_path, sandbox)
+            config = lenz(state_path, "suggest")[0]["config"]
             metrics = evaluate(oracle_path, config)
             lenz(state_path, "submit", "--config", json.dumps(config), "--metrics", json.dumps(metrics))
             incumbent_metrics = lenz(state_path, "incumbent")["metrics"]
@@ -155,6 +200,13 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=None, help="pins the renaming/shift transform AND the Sobol warm-start")
     p.add_argument("--warmup", type=int, default=None, help="shared Sobol evaluations before the policy loop (default: d+1 when --seed is set, else 0)")
     p.add_argument("--policy", default="vanilla", choices=sorted(POLICIES), help="see POLICIES in this file")
+    p.add_argument("--surrogate", choices=["fixed", "cake"], default=None, help="override the named policy's surrogate slot")
+    p.add_argument("--region", choices=["box", "turbo"], default=None, help="override the named policy's region slot")
+    p.add_argument("--sampler", choices=["botorch", "llambo"], default=None, help="override the named policy's sampler slot")
+    prior_group = p.add_mutually_exclusive_group()
+    prior_group.add_argument("--prior", default=None, help="πBO belief JSON")
+    prior_group.add_argument("--prior-fixture", default=None, help="named deterministic belief fixture")
+    p.add_argument("--decay-beta", type=float, default=10.0, help="πBO decay coefficient")
     p.add_argument("--llm-provider", default=None, help="default plugin LLM for CAKE (no Sara in this script)")
     p.add_argument("--llm-model", default=None)
     p.add_argument("--llm-base-url", default=None)
@@ -173,6 +225,12 @@ def main() -> None:
         "side-by-side comparisons",
     )
     p.add_argument("--shift", action="store_true", help="relocate the optimum even in --reveal mode (default: unmoved)")
+    p.add_argument(
+        "--context-variant",
+        default="domain",
+        choices=["domain", "generic", "misleading"],
+        help="BoLT context variant; other benchmarks must use domain",
+    )
     p.add_argument(
         "--extra-create-arg",
         action="append",
@@ -214,6 +272,13 @@ def main() -> None:
         warmup=args.warmup,
         reveal=args.reveal,
         shift=args.shift,
+        context_variant=args.context_variant,
+        surrogate=args.surrogate,
+        region=args.region,
+        sampler=args.sampler,
+        prior=json.loads(args.prior) if args.prior else None,
+        prior_fixture=args.prior_fixture,
+        decay_beta=args.decay_beta,
     )
 
     print(f"\n=== Blind baseline result ({args.policy}) ===")

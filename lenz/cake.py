@@ -24,6 +24,7 @@ import itertools
 import math
 import random
 import threading
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -648,7 +649,15 @@ def _eval_acqf(acqf, x: torch.Tensor) -> float:
     return float(val.squeeze().item())
 
 
-def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tensor | None) -> list[dict]:
+def baker_suggest(
+    frame: Frame,
+    encoder: Encoder,
+    q: int,
+    X_pending: torch.Tensor | None,
+    *,
+    bounds: torch.Tensor | None = None,
+    wrap_acqf: Callable | None = None,
+) -> list[dict]:
     """Rank kernel combinations by prod(softmax(-BIC)) * acqf(x*), then return
     the top-`q` (kernel combo, query) pairs. Uses NEHVI/EHVI for MOO, constrained
     logEI when constraints are present, and probability-of-feasibility before any
@@ -656,7 +665,7 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
     """
     observed = frame.observed_trials()
     X = encoder.stack_features(observed)
-    bounds = encoder.encode_bounds(frame.shelf.bounds)
+    bounds = bounds if bounds is not None else encoder.encode_bounds(frame.shelf.bounds)
     targets = _baker_targets(frame)
     prepared = _prepared_populations(frame, encoder, X, observed, targets)
     combos = _kernel_combos(prepared)
@@ -667,6 +676,8 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
         try:
             model_set = _model_set_for_kernels(frame, encoder, X, observed, kernels)
             acqf, _ = _build_baker_acqf(model_set, frame, acqf_name, X_pending)
+            if wrap_acqf is not None and acqf_name != "probability_of_feasibility":
+                acqf = wrap_acqf(acqf)
             x_star, _ = optimize_acqf(
                 acq_function=acqf, bounds=bounds, q=1, num_restarts=NUM_RESTARTS, raw_samples=RAW_SAMPLES
             )
@@ -703,7 +714,14 @@ def baker_suggest(frame: Frame, encoder: Encoder, q: int, X_pending: torch.Tenso
     return out
 
 
-def baker_score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[str]) -> list[dict]:
+def baker_score(
+    frame: Frame,
+    encoder: Encoder,
+    configs: list[dict],
+    acqf_names: list[str],
+    *,
+    wrap_acqf: Callable | None = None,
+) -> list[dict]:
     """Weighted-ensemble BAKER score at fixed configs: for each acqf, sum over
     kernel combos of prod(softmax(-BIC)) * acqf(combo, x).
     """
@@ -729,6 +747,8 @@ def baker_score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names:
             try:
                 model_set = _model_set_for_kernels(frame, encoder, X, observed, kernels)
                 acqf, _ = _build_baker_acqf(model_set, frame, name, None)
+                if wrap_acqf is not None and name != "probability_of_feasibility":
+                    acqf = wrap_acqf(acqf)
             except Exception:
                 continue
             any_ok = True

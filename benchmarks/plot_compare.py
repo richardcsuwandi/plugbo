@@ -53,10 +53,8 @@ def _run_budget(run_dir: Path) -> int | None:
     return budget if isinstance(budget, int) else None
 
 
-def regret_trace(condition_dir: Path) -> list[float] | None:
-    """Best-so-far true regret after each observed evaluation, in trial
-    order, capped at the run's evaluation budget. None if the condition
-    directory has no scoreable run yet.
+def regret_trace_for_state(state_path: Path, condition_dir: Path | None = None) -> list[float] | None:
+    """Best-so-far true regret for one sandbox state, capped at its budget.
 
     The cap matters for sandboxes recorded before the hard budget guardrail
     in `lenz/state.py` existed: those could over-run (e.g. an agent recording
@@ -65,9 +63,7 @@ def regret_trace(condition_dir: Path) -> list[float] | None:
     Truncating here -- rather than editing the sandbox's state.json -- keeps
     the raw historical record intact while making every comparison plot fair.
     """
-    state_path = _pick_state(condition_dir)
-    if state_path is None:
-        return None
+    condition_dir = condition_dir or state_path.parent.parent
     token = state_path.parent.name.removeprefix("sandbox_")
     secret_path = condition_dir / "_answers" / f"{token}.json"
     if not secret_path.exists():
@@ -94,6 +90,14 @@ def regret_trace(condition_dir: Path) -> list[float] | None:
     if budget is not None and len(trace) > budget:
         trace = trace[:budget]
     return trace
+
+
+def regret_trace(condition_dir: Path) -> list[float] | None:
+    """Best-so-far trace from the latest sandbox in a condition directory."""
+    state_path = _pick_state(condition_dir)
+    if state_path is None:
+        return None
+    return regret_trace_for_state(state_path, condition_dir)
 
 
 def is_scorable(condition_dir: Path) -> bool:
@@ -144,6 +148,46 @@ def condition_summary(condition_dir: Path) -> dict | None:
         "budget": budget,
         "status": _condition_status(n_evals, budget, meta_status),
     }
+
+
+def all_condition_summaries(condition_dir: Path) -> list[dict]:
+    """One summary per scoreable sandbox, ordered by seed then start time."""
+    summaries = []
+    for state_path in condition_dir.glob("sandbox_*/state.json"):
+        trace = regret_trace_for_state(state_path, condition_dir)
+        if not trace:
+            continue
+        run_dir = state_path.parent
+        meta = {}
+        meta_path = run_dir / "run_meta.json"
+        if meta_path.is_file():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                meta = {}
+        budget = _run_budget(run_dir)
+        summaries.append(
+            {
+                "condition": condition_dir.name,
+                "sandbox": run_dir.name,
+                "seed": meta.get("seed"),
+                "trace": trace,
+                "best_regret": trace[-1],
+                "n_evals": len(trace),
+                "budget": budget,
+                "status": _condition_status(len(trace), budget, meta.get("status")),
+                "started_at": meta.get("started_at"),
+                "meta": meta,
+            }
+        )
+    return sorted(
+        summaries,
+        key=lambda item: (
+            item["seed"] is None,
+            item["seed"] if item["seed"] is not None else 0,
+            item["started_at"] or "",
+        ),
+    )
 
 
 def _with_eval_zero(trace: list[float]) -> list[float]:

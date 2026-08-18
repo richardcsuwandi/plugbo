@@ -214,7 +214,15 @@ def suggest(
     if plain_call and cake_module.can_use_baker(frame) and not needs_warmup(frame, encoder):
         try:
             return _commit_suggestions(
-                frame, cake_module.baker_suggest(frame, encoder, q, _pending_X(frame, encoder))
+                frame,
+                cake_module.baker_suggest(
+                    frame,
+                    encoder,
+                    q,
+                    _pending_X(frame, encoder),
+                    bounds=bounds,
+                    wrap_acqf=lambda acqf: _wrap_acqf(acqf, frame, encoder),
+                ),
             )
         except cake_module.CakeNotReadyError:
             pass  # populations not ready -- fall back to best kernel per metric below
@@ -256,7 +264,13 @@ def suggest(
 def score(frame: Frame, encoder: Encoder, configs: list[dict], acqf_names: list[str]) -> list[dict]:
     if frame.shelf.surrogate == "cake" and cake_module.can_use_baker(frame):
         try:
-            return cake_module.baker_score(frame, encoder, configs, acqf_names)
+            return cake_module.baker_score(
+                frame,
+                encoder,
+                configs,
+                acqf_names,
+                wrap_acqf=lambda acqf: _wrap_acqf(acqf, frame, encoder),
+            )
         except cake_module.CakeNotReadyError:
             pass  # populations not ready -- fall back to best kernel per metric below
 

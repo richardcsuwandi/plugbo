@@ -117,6 +117,15 @@ def test_set_belief_weights_the_mode():
     assert near > far * 10
 
 
+def test_categorical_belief_accepts_json_string_keys():
+    space = SearchSpace.from_json({"choice": {"kind": "choice", "values": [0, 1]}})
+    frame = Frame(space=space, shelf=Shelf(objectives=[Objective(metric="y", minimize=True)]))
+    belief = {"choice": {"dist": "categorical", "probs": {"0": 0.8, "1": 0.2}}}
+
+    assert prior_density(frame, {"choice": 0}, belief) == 0.8
+    assert prior_density(frame, {"choice": 1}, belief) == 0.2
+
+
 def test_set_belief_cli(tmp_path):
     state = tmp_path / "state.json"
     _run_cli(
