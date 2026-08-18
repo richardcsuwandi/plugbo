@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-bo"
+version = "0.1.0"
+description = "Agentic Bayesian Optimization: Sara (LLM agent) + lenz (BoTorch backend)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "gpytorch>=1.11",
+    "botorch>=0.10",
+    "numpy",
+    "scipy",
+    "anthropic>=0.40",
+    "openai>=1.50",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+lenz = "lenz.cli:main"
+sara = "sara.cli:main"
+sara-blind-test = "benchmarks.run_blind_test:main"
+sara-viz = "viz.server:main"
+
+[tool.setuptools.packages.find]
+include = ["lenz*", "sara*", "benchmarks*", "llm*", "viz*"]
+
+[tool.setuptools.package-data]
+viz = ["static/*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: end-to-end tests that fit several GPs (deselect with -m 'not slow')"]

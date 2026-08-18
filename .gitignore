@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.env
+state.json
+*.sandbox/
+runs/
+results/
+.DS_Store
+docs/

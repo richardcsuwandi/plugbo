@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agentic-bo viewer</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>agentic-bo</h1>
+      <button id="theme-toggle" title="Toggle theme">◐</button>
+    </div>
+    <div id="sidebar-nav">
+      <button class="sidebar-nav-btn active" data-sidebar="runs">Runs</button>
+      <button class="sidebar-nav-btn" data-sidebar="experiments">Experiments</button>
+    </div>
+    <div id="runs-sidebar">
+      <div id="search-wrap">
+        <input id="search-input" type="text" placeholder="Search runs…" />
+      </div>
+      <div id="compare-bar">
+        <span id="compare-count">0 selected</span>
+        <span>
+          <button id="compare-clear" title="Deselect all">Clear</button>
+          <button id="compare-btn">Compare →</button>
+        </span>
+      </div>
+      <ul id="run-list"></ul>
+      <div id="empty-state" style="display:none">
+        No runs found under <code>--root</code>.
+      </div>
+    </div>
+    <div id="experiments-sidebar" style="display:none">
+      <div id="group-picker-wrap">
+        <label for="group-select">Group</label>
+        <select id="group-select">
+          <option value="">Loading…</option>
+        </select>
+        <div id="group-meta" class="group-meta"></div>
+      </div>
+      <div id="group-empty" style="display:none" class="empty-note sidebar-empty">
+        No experiment groups found.
+      </div>
+    </div>
+  </div>
+  <div id="main">
+    <div id="empty-main" class="empty-note" style="padding-top:8px">
+      Select a run, or open Experiments to compare conditions.
+    </div>
+    <div id="run-view" style="display:none">
+      <div id="main-header">
+        <div>
+          <h2 id="run-title"></h2>
+          <div class="sub" id="run-subtitle"></div>
+          <div class="sub-row" id="run-subrow"></div>
+        </div>
+        <div id="header-badges"></div>
+      </div>
+      <div class="tabs" id="tabs">
+        <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="config">Config</button>
+        <button class="tab-btn" data-tab="trials">Trials</button>
+        <button class="tab-btn" data-tab="trace">Trace</button>
+        <button class="tab-btn" data-tab="toolUse" id="tool-use-tab-btn" style="display:none">Tool use</button>
+        <button class="tab-btn" data-tab="kernels" id="kernels-tab-btn" style="display:none">Kernel population</button>
+      </div>
+      <div id="panels"></div>
+    </div>
+    <div id="compare-view" style="display:none"></div>
+    <div id="experiment-compare-view" style="display:none"></div>
+  </div>
+</div>
+<div id="tooltip"></div>
+<script src="/app.js"></script>
+</body>
+</html>
