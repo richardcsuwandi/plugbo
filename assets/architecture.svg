@@ -1,74 +1,151 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
-  <title id="title">AlphaBO architecture</title>
-  <desc id="desc">Sara is a campaign LLM that calls lenz through bash. lenz is a BoTorch CLI over a persistent Frame. Plugin slots for surrogate, region, prior, and sampler sit on that backend.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
+  <title id="title">AlphaBO architecture, capability-centric view</title>
+  <desc id="desc">A compact hub-and-spoke view of AlphaBO. Sara controls a lenz state engine, exchanges configurations and metrics with an evaluator, and selects among CAKE, TuRBO, piBO, and LLAMBO capabilities.</desc>
+
   <defs>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#1a365d" flood-opacity=".13"/>
-    </filter>
-    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#3973bd"/>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#26323c"/>
     </marker>
+    <marker id="arrow-blue" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#477fae"/>
+    </marker>
+    <style>
+      .sans { font-family: Arial, Helvetica, sans-serif; fill: #20272d; }
+      .mono { font-family: "Courier New", Courier, monospace; font-style: normal; fill: #20272d; }
+      .title { font-size: 26px; font-weight: 700; }
+      .module { font-size: 20px; font-weight: 700; }
+      .subtitle { font-size: 12.5px; }
+      .label { font-size: 12px; font-weight: 700; letter-spacing: 0.7px; }
+      .body { font-size: 12px; }
+      .small { font-size: 10.5px; }
+      .line { fill: none; stroke: #26323c; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      .blue-line { fill: none; stroke: #477fae; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
   </defs>
 
-  <rect width="1200" height="720" rx="28" fill="#f8fafc"/>
-  <text x="600" y="48" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="28" font-weight="700" fill="#172033">AlphaBO</text>
-  <text x="600" y="78" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="16" fill="#526077">Sara calls lenz the way an MCP client calls tools; plugins occupy slots on the backend</text>
+  <rect width="1200" height="540" fill="#ffffff"/>
+  <ellipse cx="645" cy="276" rx="286" ry="210" fill="#fafbfc"/>
 
-  <g font-family="Inter,Arial,sans-serif">
-    <text x="80" y="112" font-size="12" font-weight="700" letter-spacing="1.6" fill="#285f9d">AGENT</text>
-    <g filter="url(#shadow)">
-      <rect x="60" y="124" width="1080" height="128" rx="20" fill="#dbeafe" stroke="#3973bd" stroke-width="2"/>
-    </g>
-    <circle cx="148" cy="188" r="38" fill="#ffffff" stroke="#3973bd" stroke-width="3"/>
-    <text x="148" y="200" text-anchor="middle" font-size="28" font-weight="700" fill="#3973bd">S</text>
-    <text x="210" y="172" font-size="22" font-weight="700" fill="#173b6c">Sara</text>
-    <text x="210" y="196" font-size="14" fill="#294d78">campaign LLM  |  tools: bash, read</text>
-    <text x="210" y="222" font-size="14" fill="#294d78">inspect posterior  |  revise c(t)  |  commit evaluation</text>
-
-    <text x="80" y="288" font-size="12" font-weight="700" letter-spacing="1.6" fill="#526077">TOOL SURFACE</text>
-    <path d="M600 262 V278" stroke="#3973bd" stroke-width="3" marker-end="url(#arrowBlue)"/>
-    <rect x="280" y="300" width="640" height="44" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
-    <text x="600" y="328" text-anchor="middle" font-size="15" font-weight="700" fill="#173b6c">lenz &lt;verb&gt; --state state.json  -&gt;  JSON</text>
-
-    <text x="80" y="382" font-size="12" font-weight="700" letter-spacing="1.6" fill="#526077">BACKEND</text>
-    <g filter="url(#shadow)">
-      <rect x="60" y="394" width="1080" height="292" rx="20" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
-    </g>
-    <text x="90" y="430" font-size="22" font-weight="700" fill="#2d3748">lenz</text>
-    <text x="160" y="430" font-size="14" fill="#526077">BoTorch CLI over a persistent Frame</text>
-    <text x="90" y="454" font-size="13" fill="#64748b">create / suggest / submit / observe / set-* / plugin verbs</text>
-
-    <rect x="90" y="478" width="230" height="88" rx="12" fill="#fef3c7" stroke="#d7a83d" stroke-width="2"/>
-    <text x="205" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#744b0b">trial log D(t)</text>
-    <text x="205" y="534" text-anchor="middle" font-size="12" fill="#805d1b">configs + outcomes</text>
-    <text x="205" y="552" text-anchor="middle" font-size="12" fill="#805d1b">never discarded</text>
-
-    <rect x="340" y="478" width="250" height="88" rx="12" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
-    <text x="465" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#455468">shelf c(t)</text>
-    <text x="465" y="534" text-anchor="middle" font-size="12" fill="#526077">M, &#945;, B, O, C</text>
-    <text x="465" y="552" text-anchor="middle" font-size="12" fill="#526077">live policy, mutable</text>
-
-    <rect x="610" y="478" width="500" height="88" rx="12" fill="#e9d8fd" stroke="#805ad5" stroke-width="2"/>
-    <text x="860" y="510" text-anchor="middle" font-size="14" font-weight="700" fill="#44337a">plugin state</text>
-    <text x="860" y="534" text-anchor="middle" font-size="12" fill="#5d477c">cake / turbo / pibo / llambo blobs</text>
-    <text x="860" y="552" text-anchor="middle" font-size="12" fill="#5d477c">off the shelf; agent-invocable</text>
-
-    <text x="90" y="596" font-size="12" font-weight="700" letter-spacing="1.4" fill="#526077">PLUGIN SLOTS</text>
-    <rect x="90" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
-    <text x="210" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">M  surrogate</text>
-    <text x="210" y="650" text-anchor="middle" font-size="12" fill="#526077">fixed  |  CAKE</text>
-
-    <rect x="350" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
-    <text x="470" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">B  region</text>
-    <text x="470" y="650" text-anchor="middle" font-size="12" fill="#526077">box  |  TuRBO</text>
-
-    <rect x="610" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
-    <text x="730" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">prior</text>
-    <text x="730" y="650" text-anchor="middle" font-size="12" fill="#526077">NL  |  &#960;BO</text>
-
-    <rect x="870" y="608" width="240" height="56" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
-    <text x="990" y="630" text-anchor="middle" font-size="13" font-weight="700" fill="#2d3748">sampler</text>
-    <text x="990" y="650" text-anchor="middle" font-size="12" fill="#526077">BoTorch  |  LLAMBO</text>
+  <!-- Heading -->
+  <g class="sans">
+    <text x="600" y="48" text-anchor="middle" class="title">AlphaBO</text>
   </g>
+
+  <!-- Run specification -->
+  <g class="sans" transform="translate(0,-20)">
+    <rect x="42" y="110" width="258" height="112" rx="14" fill="#eef0f2" stroke="#d2d7db" stroke-width="1"/>
+    <text x="62" y="138" class="label" fill="#5d6871">RUN SPECIFICATION</text>
+    <text x="62" y="163" class="mono body">context.md + --eval</text>
+    <text x="62" y="184" class="body">space / objectives / budget</text>
+    <text x="62" y="205" class="body">provider / model / workdir</text>
+  </g>
+
+  <!-- Sara -->
+  <g class="sans" transform="translate(0,-52)">
+    <rect x="42" y="282" width="348" height="202" rx="18" fill="#dfeaf6" stroke="#aac6df" stroke-width="1.2"/>
+    <text x="64" y="315" class="module" fill="#356fae">Sara</text>
+    <text x="64" y="336" class="subtitle">campaign controller</text>
+    <rect x="272" y="300" width="94" height="25" rx="12.5" fill="#ffffff" stroke="#b8cede" stroke-width="0.8"/>
+    <text x="319" y="317" text-anchor="middle" class="mono small" fill="#506576">bash / read</text>
+
+    <rect x="64" y="365" width="82" height="42" rx="9" fill="#ffffff"/>
+    <text x="105" y="390" text-anchor="middle" class="body" font-weight="700">reason</text>
+
+    <rect x="175" y="365" width="82" height="42" rx="9" fill="#ffffff"/>
+    <text x="216" y="390" text-anchor="middle" class="body" font-weight="700">choose</text>
+
+    <rect x="286" y="365" width="82" height="42" rx="9" fill="#ffffff"/>
+    <text x="327" y="390" text-anchor="middle" class="body" font-weight="700">adapt</text>
+
+    <path d="M146,386 H169" class="blue-line" marker-end="url(#arrow-blue)"/>
+    <path d="M257,386 H280" class="blue-line" marker-end="url(#arrow-blue)"/>
+    <path d="M327,412 C318,450 120,450 105,413" class="blue-line" marker-end="url(#arrow-blue)"/>
+  </g>
+
+  <!-- Objective evaluator -->
+  <g class="sans" transform="translate(0,-72)">
+    <rect x="78" y="532" width="276" height="58" rx="12" fill="#626b72"/>
+    <text x="98" y="557" font-size="15" font-weight="700" fill="#ffffff">Objective evaluator</text>
+    <text x="98" y="577" class="mono small" style="fill:#ffffff">--eval command or ./oracle</text>
+  </g>
+
+  <!-- lenz state hub -->
+  <g class="sans" transform="translate(0,-74)">
+    <rect x="470" y="184" width="326" height="300" rx="22" fill="#fbe9da" stroke="#dfb996" stroke-width="1.3"/>
+    <text x="496" y="220" class="module" fill="#cb6b2e">lenz</text>
+    <text x="496" y="242" class="subtitle">CLI + BoTorch state engine</text>
+
+    <rect x="496" y="263" width="274" height="142" rx="12" fill="#ffffff" stroke="#ead3c1" stroke-width="0.9"/>
+    <text x="518" y="292" class="label">state.json</text>
+    <text x="748" y="292" text-anchor="end" class="mono small" fill="#7a6657">Frame</text>
+
+    <rect x="518" y="310" width="66" height="30" rx="7" fill="#fff7f0"/>
+    <text x="551" y="329" text-anchor="middle" class="mono small">space</text>
+    <rect x="594" y="310" width="66" height="30" rx="7" fill="#fff7f0"/>
+    <text x="627" y="329" text-anchor="middle" class="mono small">shelf</text>
+    <rect x="670" y="310" width="76" height="30" rx="7" fill="#fff7f0"/>
+    <text x="708" y="329" text-anchor="middle" class="mono small">plugins</text>
+
+    <rect x="518" y="350" width="104" height="30" rx="7" fill="#fff7f0"/>
+    <text x="570" y="369" text-anchor="middle" class="mono small">trials</text>
+    <rect x="632" y="350" width="114" height="30" rx="7" fill="#fff7f0"/>
+    <text x="689" y="369" text-anchor="middle" class="mono small">events</text>
+
+    <text x="633" y="396" text-anchor="middle" class="small" fill="#655f5a">set-* changes policy, never trial history</text>
+
+    <rect x="496" y="425" width="274" height="37" rx="9" fill="#35404a"/>
+    <text x="633" y="448" text-anchor="middle" class="mono small" style="fill:#ffffff">suggest / score / submit / observe / set-*</text>
+  </g>
+
+  <!-- Capability slots -->
+  <g class="sans">
+    <rect x="826" y="102" width="340" height="306" rx="22" fill="#ffffff" fill-opacity="0.76" stroke="#d7dce0" stroke-width="1"/>
+    <text x="996" y="128" text-anchor="middle" class="label" fill="#66727b">CAPABILITY SLOTS</text>
+
+    <rect x="844" y="146" width="148" height="112" rx="15" fill="#f8dfcd" stroke="#e4b995" stroke-width="1"/>
+    <text x="862" y="171" font-size="11.5" fill="#865a39">SURROGATE</text>
+    <text x="862" y="203" font-size="19" font-weight="700">CAKE</text>
+    <text x="862" y="229" font-size="11.5" fill="#75675d">default: fixed Matern</text>
+
+    <rect x="1012" y="146" width="148" height="112" rx="15" fill="#e3f0e5" stroke="#afd0b4" stroke-width="1"/>
+    <text x="1030" y="171" font-size="11.5" fill="#4d7654">REGION</text>
+    <text x="1030" y="203" font-size="19" font-weight="700">TuRBO</text>
+    <text x="1030" y="229" font-size="11.5" fill="#647269">default: box</text>
+
+    <rect x="844" y="280" width="148" height="112" rx="15" fill="#f6efd5" stroke="#d9ca8f" stroke-width="1"/>
+    <text x="862" y="305" font-size="11.5" fill="#7b6c32">PRIOR</text>
+    <text x="862" y="337" font-size="19" font-weight="700">&#960;BO</text>
+    <text x="862" y="363" font-size="11.5" fill="#726d5c">default: none</text>
+
+    <rect x="1012" y="280" width="148" height="112" rx="15" fill="#ece7f5" stroke="#c4b6dc" stroke-width="1"/>
+    <text x="1030" y="305" font-size="11.5" fill="#675783">SAMPLER</text>
+    <text x="1030" y="337" font-size="19" font-weight="700">LLAMBO</text>
+    <text x="1030" y="363" font-size="11.5" fill="#6d6875">default: BoTorch</text>
+  </g>
+
+  <!-- Run specification to Sara -->
+  <path d="M170,202 C170,213 190,216 190,224" class="line" marker-end="url(#arrow)"/>
+  <rect x="128" y="203" width="84" height="20" rx="10" fill="#ffffff"/>
+  <text x="170" y="217" text-anchor="middle" class="mono small">campaign</text>
+
+  <!-- Sara and lenz exchange -->
+  <path d="M390,281 C426,259 438,215 470,198" class="line" marker-end="url(#arrow)"/>
+  <rect x="394" y="225" width="90" height="21" rx="10" fill="#ffffff"/>
+  <text x="439" y="240" text-anchor="middle" class="mono small">lenz &lt;verb&gt;</text>
+
+  <path d="M470,328 C438,338 425,363 390,379" class="line" marker-end="url(#arrow)"/>
+  <rect x="409" y="343" width="53" height="21" rx="10" fill="#ffffff"/>
+  <text x="435" y="358" text-anchor="middle" class="mono small">JSON</text>
+
+  <!-- Evaluation loop -->
+  <path d="M154,432 C142,443 151,453 175,456" class="line" marker-end="url(#arrow)"/>
+  <rect x="88" y="435" width="56" height="19" rx="9.5" fill="#ffffff"/>
+  <text x="116" y="448" text-anchor="middle" class="mono small">config</text>
+  <path d="M295,460 C327,453 326,442 307,433" class="line" marker-end="url(#arrow)"/>
+  <rect x="331" y="435" width="59" height="19" rx="9.5" fill="#ffffff"/>
+  <text x="360" y="448" text-anchor="middle" class="mono small">metrics</text>
+
+  <!-- One clean connection to the grouped capability interface -->
+  <path d="M796,200 C810,200 814,211 826,220" class="line" marker-end="url(#arrow)"/>
 </svg>

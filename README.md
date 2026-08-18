@@ -126,12 +126,22 @@ python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
 ./scripts/run_synthetic.sh hartmann6 --disclosure revealed
 ./scripts/run_synthetic.sh hartmann6 --disclosure revealed-shift
 ./scripts/run_synthetic.sh hartmann6 --backend sara-lenz --disclosure all
+./scripts/run_synthetic.sh hartmann6 --warmup 7
 ```
 
 `--disclosure` is `blind` (default), `revealed`, `revealed-shift`, or `all`.
 `--backend` is a comma list (`vanilla`, `cake`, `turbo`, `sara-lenz`,
 `sara-lenz-cake`, `sara-only`), or `all` for vanilla + sara-lenz +
-sara-lenz-cake. `--disclosure all` needs a single backend.
+`sara-lenz-cake`. `--disclosure all` needs a single backend. Every backend
+uses the same seeded Sobol warm-start, defaulting to `d+1` evaluations when a
+seed is set. Pass `--warmup N` to override it for all selected backends.
+
+To rerun only Sara-only in an existing synthetic comparison with the same
+warm-start:
+
+```bash
+./scripts/rerun_sara_only.sh hartmann6
+```
 
 BoLT LoRA is mixed-type HPO [[7]](#ref-7) (always revealed, no textbook
 optimum):
