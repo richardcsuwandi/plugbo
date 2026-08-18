@@ -41,7 +41,7 @@ from sara.cli import _now_iso, _system_prompt, _system_prompt_sara_only, _user_p
 from llm.factory import get_client
 from lenz.llm_config import export_api_key, stamp_workdir
 
-from .lenz_loop import create_and_warmup
+from .lenz_loop import create_and_warmup, warmup_n
 from .obfuscate import ObfuscatedBenchmark
 from .run_blind_test import _backend_directive, _lenz_create_args, score_sandbox
 from .sandbox import build_sandbox
@@ -79,7 +79,7 @@ def run_noblind_test(
     surrogate: str = "fixed",
     acqf: str = "noisy_logei",
     extra_body: str | None = None,
-    warmup: int = 0,
+    warmup: int | None = None,
     one_shot_tol: float = 1e-2,
     kernel_llm_provider: str | None = None,
     kernel_llm_model: str | None = None,
@@ -106,13 +106,9 @@ def run_noblind_test(
     if no_lenz:
         from .sara_only import install_sara_only
 
-        # Opt-in only (see run_blind_test.py's identical comment): a
-        # --no-lenz run that never passes --warmup keeps its historical
-        # zero-warmup behavior. Passing --warmup N runs the same real
-        # Sobol warm-start the lenz-backed sibling conditions get, via the
-        # harness itself (never exposed to the agent), so the comparison
-        # isn't silently handing sara-only N free extra evaluations.
-        n_warm = max(0, warmup) if warmup else 0
+        # Use the same seeded initial design as every sibling backend.
+        # The harness creates it before lenz is hidden from the agent.
+        n_warm = warmup_n(len(ob.param_names), seed, warmup)
         already = 0
         if n_warm:
             warm_create_args = _lenz_create_args(
@@ -156,7 +152,7 @@ def run_noblind_test(
             kernel_llm_api_key_env=kernel_llm_api_key_env,
             kernel_llm_extra_body=kernel_llm_extra_body,
         )
-        n_warm = max(0, warmup)
+        n_warm = warmup_n(len(ob.param_names), seed, warmup)
         already = create_and_warmup(
             sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
         )
@@ -269,7 +265,7 @@ def main() -> None:
         action="store_true",
         help="also relocate the optimum (same transform as the blind condition) -- tests adaptation from a revealed prior, not pure recall",
     )
-    p.add_argument("--warmup", type=int, default=0, help="Sobol evals before sara starts (default 0 -- keep evaluation #1 the agent's own choice)")
+    p.add_argument("--warmup", type=int, default=None, help="shared Sobol evaluations before sara starts (default: d+1 when --seed is set, else 0)")
     p.add_argument("--surrogate", default="fixed", choices=["fixed", "cake"])
     p.add_argument("--acqf", default="noisy_logei")
     p.add_argument("--kernel-llm-provider", default=None, help="CAKE override; defaults to --provider/--model")

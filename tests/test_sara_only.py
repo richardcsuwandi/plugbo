@@ -189,9 +189,10 @@ def test_wrapper_score_sandbox_roundtrip(tmp_path):
     assert scored["best_regret"] < float("inf")
 
 
-def test_run_blind_test_no_lenz_skips_warmup_and_blocks(tmp_path, monkeypatch):
+def test_run_blind_test_no_lenz_uses_shared_default_warmup_and_blocks(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
+    import benchmarks.sara_only as sara_only_mod
     from benchmarks import run_blind_test as m
 
     sandbox = tmp_path / "sandbox_nolenz"
@@ -216,10 +217,21 @@ def test_run_blind_test_no_lenz_skips_warmup_and_blocks(tmp_path, monkeypatch):
         json.dumps({"benchmark": "hartmann6", "param_names": list("abcdef"), "shift_frac": [0.0] * 6, "seed": 1})
     )
 
-    def boom(*a, **k):
-        raise AssertionError("create_and_warmup must not run in --no-lenz")
+    warm_calls = []
 
-    monkeypatch.setattr(m, "create_and_warmup", boom)
+    def fake_warmup(sandbox_arg, space, create_args, n_warmup, budget, objectives=None):
+        warm_calls.append(n_warmup)
+        return n_warmup
+
+    install_calls = []
+    real_install = sara_only_mod.install_sara_only
+
+    def spy_install(*a, **k):
+        install_calls.append(k)
+        return real_install(*a, **k)
+
+    monkeypatch.setattr(m, "create_and_warmup", fake_warmup)
+    monkeypatch.setattr(sara_only_mod, "install_sara_only", spy_install)
     monkeypatch.setattr(m, "get_client", lambda *a, **k: object())
     monkeypatch.setattr(m, "run_campaign", fake_campaign)
     monkeypatch.setattr(
@@ -235,12 +247,15 @@ def test_run_blind_test_no_lenz_skips_warmup_and_blocks(tmp_path, monkeypatch):
         },
     )
     m.run_blind_test("hartmann6", provider="openai", model="x", budget=10, root=tmp_path, seed=1, no_lenz=True)
+    assert warm_calls == [7]
+    assert install_calls[-1]["preserve_trials"] is True
     assert captured.get("block_lenz") is True
     assert "lenz" not in captured["system_prompt"].lower()
     assert "lenz" not in captured["user_prompt"].lower()
+    assert "7 evaluation(s) already ran" in captured["user_prompt"]
     meta = json.loads((sandbox / "run_meta.json").read_text())
     assert meta["kind"] == "sara-only"
-    assert meta["warmup"] == 0
+    assert meta["warmup"] == 7
     assert (sandbox / ".oracle_impl").is_file()
 
 
