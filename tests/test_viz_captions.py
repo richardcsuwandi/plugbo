@@ -1,4 +1,4 @@
-from viz.captions import bench_label, classify_group, classify_relpath, experiment_caption
+from viz.captions import bench_label, classify_group, classify_relpath, experiment_caption, heading_with_seed
 
 
 def test_bench_label_known_and_gp_sample():
@@ -53,6 +53,13 @@ def test_classify_relpath_shifted_backend_sweep():
     assert tax["disclosure"] == "shifted"
     assert tax["backend"] == "sara-lenz"
     assert tax["axis"] == "backend"
+
+
+def test_heading_with_seed_appends_blind_seed():
+    assert heading_with_seed("ackley10-compare", 42) == "Ackley-10 · blind · seed 42"
+    assert heading_with_seed("gp_sample6-blind", 43) == "GP sample (6D) · blind · seed 43"
+    assert heading_with_seed("ackley10-compare", None) == "Ackley-10 · blind"
+    assert heading_with_seed("bolt_lora-seed7-compare", 7) == "BOLT LoRA HPO · seed 7"
 
 
 def test_classify_group_headings():

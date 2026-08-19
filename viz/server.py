@@ -1,4 +1,4 @@
-"""A minimal local viewer for agentic-bo run artifacts (state.json,
+"""A minimal local viewer for alphabo run artifacts (state.json,
 trace.jsonl, run_meta.json) under `--root` (default: results/logs). Stdlib
 only, no new dependencies: `python3 -m viz.server`.
 """
@@ -15,10 +15,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from benchmarks.obfuscate import ObfuscatedBenchmark
 from benchmarks.plot_all import find_groups
-from benchmarks.plot_compare import _pick_state, collect_traces, condition_summary, is_scorable
+from benchmarks.plot_compare import (
+    _pick_state,
+    _sandbox_seed,
+    collect_traces,
+    condition_summary,
+    group_seeds,
+    is_scorable,
+    regret_trace_for_state,
+)
 
-from .captions import classify_group, classify_relpath, experiment_caption
+from .captions import classify_group, classify_relpath, experiment_caption, heading_with_seed
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -144,6 +153,7 @@ def find_runs(root: Path) -> list[dict]:
                     "disclosure": tax["disclosure"],
                     "disclosure_label": tax["disclosure_label"],
                     "heading": tax["heading"],
+                    "seed": meta.get("seed") if meta else None,
                     "_sort_key": _started_at_epoch(run_dir, state, meta) or 0,
                 }
             )
@@ -305,6 +315,32 @@ def _tool_use_events(state: dict, trace: list[dict]) -> list[dict] | None:
     return events or None
 
 
+def _run_regret(run_dir: Path) -> dict | None:
+    """True regret vs the hidden optimum, when `_answers/<token>.json` exists."""
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return None
+    trace = regret_trace_for_state(state_path, run_dir.parent)
+    if not trace:
+        return None
+    token = run_dir.name.removeprefix("sandbox_")
+    secret_path = run_dir.parent / "_answers" / f"{token}.json"
+    try:
+        spec = ObfuscatedBenchmark.from_secret(json.loads(secret_path.read_text())).spec
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        spec = None
+    return {
+        "best": trace[-1],
+        "eval1": trace[0],
+        "trace": trace,
+        "f_opt": spec.f_opt if spec is not None else None,
+        "benchmark": spec.name if spec is not None else None,
+        "points": [
+            {"i": i, "value": value, "best": value} for i, value in enumerate(trace, start=1)
+        ],
+    }
+
+
 def run_detail(root: Path, name: str) -> dict | None:
     root = root.resolve()
     run_dir = (root / name).resolve()
@@ -321,6 +357,7 @@ def run_detail(root: Path, name: str) -> dict | None:
         "run_kind": _run_kind(meta, has_trace),
         "trace": trace,
         "convergence": _compute_convergence(state),
+        "regret": _run_regret(run_dir),
         "kernel_generations": _kernel_generations(state),
         "tool_use": _tool_use_events(state, trace),
         "reconfigurations": _reconfigurations(state),
@@ -343,90 +380,132 @@ def _sandbox_started_at(sandbox_dir: Path) -> float | None:
     return _started_at_epoch(sandbox_dir, state, meta)
 
 
-def _group_started_at(child_dirs: list[Path]) -> float | None:
+COMPARE_SEED_SEP = "::"
+
+
+def split_compare_ref(name: str) -> tuple[str, int | None]:
+    """`ackley10-compare::42` -> (`ackley10-compare`, 42). Bare paths keep seed None."""
+    if COMPARE_SEED_SEP in name:
+        rel, rhs = name.rsplit(COMPARE_SEED_SEP, 1)
+        if rhs.lstrip("-").isdigit():
+            return rel, int(rhs)
+    return name, None
+
+
+def _group_started_at(child_dirs: list[Path], seed: int | None = None) -> float | None:
     keys = []
     for child in child_dirs:
         for sandbox in child.glob("sandbox_*"):
-            if sandbox.is_dir():
-                started = _sandbox_started_at(sandbox)
-                if started is not None:
-                    keys.append(started)
+            if not sandbox.is_dir():
+                continue
+            if seed is not None and _sandbox_seed(sandbox) != seed:
+                continue
+            started = _sandbox_started_at(sandbox)
+            if started is not None:
+                keys.append(started)
     return max(keys) if keys else None
 
 
 def find_compare_groups(root: Path) -> list[dict]:
-    """Comparison groups: dirs whose children each hold sandbox_*/state.json."""
+    """Comparison groups: dirs whose children each hold sandbox_*/state.json.
+
+    Extra seeds in the same folder become separate sidebar rows
+    (`ackley10-compare::42`) so seed 42 and seed 43 never overlay.
+    """
     root = root.resolve()
     groups = []
     for g in find_groups(root):
         rel = g.relative_to(root).as_posix()
         child_dirs = [c for c in g.iterdir() if c.is_dir() and any(c.glob("sandbox_*"))]
         tax = classify_group(rel)
-        backends: set[str] = set()
-        disclosures: set[str] = set()
-        statuses: set[str] = set()
-        if tax["backend"]:
-            backends.add(tax["backend"])
-        if tax["disclosure"]:
-            disclosures.add(tax["disclosure"])
-        for child in child_dirs:
-            child_tax = classify_relpath(f"{rel}/{child.name}")
-            if child_tax["backend"]:
-                backends.add(child_tax["backend"])
-            if child_tax["disclosure"]:
-                disclosures.add(child_tax["disclosure"])
-            metas = list(child.glob("sandbox_*/run_meta.json"))
-            if metas:
-                latest = max(metas, key=lambda p: p.stat().st_mtime)
-                try:
-                    meta = json.loads(latest.read_text())
-                except (json.JSONDecodeError, OSError):
-                    meta = {}
-                statuses.add(meta.get("status") or "completed")
-            else:
-                statuses.add("completed")
-        groups.append(
-            {
-                "name": rel,
-                "title": rel.replace("/", " / "),
-                "heading": tax["heading"],
-                "caption": experiment_caption(rel),
-                "n_conditions": len(child_dirs),
-                "n_scored": sum(1 for c in child_dirs if is_scorable(c)),
-                "benchmark": tax["benchmark"],
-                "benchmark_label": tax["benchmark_label"],
-                "axis": tax["axis"],
-                "backends": sorted(backends),
-                "disclosures": sorted(disclosures),
-                "statuses": sorted(statuses),
-                "started_at": _epoch_to_iso(_group_started_at(child_dirs)),
-            }
-        )
-    groups.sort(key=lambda x: x["name"])
+        seeds = group_seeds(g)
+        slices: list[int | None] = list(seeds) if seeds else [None]
+        for seed in slices:
+            backends: set[str] = set()
+            disclosures: set[str] = set()
+            statuses: set[str] = set()
+            seed_children = []
+            if tax["backend"]:
+                backends.add(tax["backend"])
+            if tax["disclosure"]:
+                disclosures.add(tax["disclosure"])
+            for child in child_dirs:
+                if seed is not None and _pick_state(child, seed=seed) is None:
+                    continue
+                seed_children.append(child)
+                child_tax = classify_relpath(f"{rel}/{child.name}")
+                if child_tax["backend"]:
+                    backends.add(child_tax["backend"])
+                if child_tax["disclosure"]:
+                    disclosures.add(child_tax["disclosure"])
+                metas = [
+                    path
+                    for path in child.glob("sandbox_*/run_meta.json")
+                    if seed is None or _sandbox_seed(path.parent) == seed
+                ]
+                if metas:
+                    latest = max(metas, key=lambda p: p.stat().st_mtime)
+                    try:
+                        meta = json.loads(latest.read_text())
+                    except (json.JSONDecodeError, OSError):
+                        meta = {}
+                    statuses.add(meta.get("status") or "completed")
+                else:
+                    statuses.add("completed")
+            if seed is not None and not seed_children:
+                continue
+            name = f"{rel}{COMPARE_SEED_SEP}{seed}" if seed is not None else rel
+            caption = experiment_caption(rel)
+            if seed is not None and "seed" not in caption.lower():
+                caption = f"{caption.rstrip('.')} (seed {seed})."
+            groups.append(
+                {
+                    "name": name,
+                    "title": name.replace("/", " / "),
+                    "heading": heading_with_seed(rel, seed),
+                    "caption": caption,
+                    "n_conditions": len(seed_children) if seed is not None else len(child_dirs),
+                    "n_scored": sum(1 for c in seed_children if is_scorable(c, seed=seed)),
+                    "benchmark": tax["benchmark"],
+                    "benchmark_label": tax["benchmark_label"],
+                    "axis": tax["axis"],
+                    "backends": sorted(backends),
+                    "disclosures": sorted(disclosures),
+                    "statuses": sorted(statuses),
+                    "started_at": _epoch_to_iso(_group_started_at(child_dirs, seed=seed)),
+                    "seed": seed,
+                }
+            )
+    groups.sort(key=lambda x: (x["name"], x.get("seed") is None, x.get("seed") or 0))
     return groups
 
 
 def compare_group_detail(root: Path, name: str) -> dict | None:
     root = root.resolve()
-    group_dir = (root / name).resolve()
+    rel, seed = split_compare_ref(name)
+    group_dir = (root / rel).resolve()
     if not (group_dir.is_relative_to(root) and group_dir.is_dir()):
         return None
-    traces = collect_traces(group_dir)
+    traces = collect_traces(group_dir, seed=seed)
     conditions = []
     for condition_dir in sorted(p for p in group_dir.iterdir() if p.is_dir()):
-        summary = condition_summary(condition_dir)
+        summary = condition_summary(condition_dir, seed=seed)
         if summary:
             item = {k: v for k, v in summary.items() if k != "trace"}
-            state_path = _pick_state(condition_dir)
+            state_path = _pick_state(condition_dir, seed=seed)
             if state_path is not None:
                 item["run_name"] = state_path.parent.relative_to(root).as_posix()
             conditions.append(item)
+    caption = experiment_caption(rel)
+    if seed is not None and "seed" not in caption.lower():
+        caption = f"{caption.rstrip('.')} (seed {seed})."
     return {
         "name": name,
-        "title": name.replace("/", " / "),
-        "caption": experiment_caption(name),
+        "title": heading_with_seed(rel, seed),
+        "caption": caption,
         "traces": traces,
         "conditions": conditions,
+        "seed": seed,
     }
 
 
@@ -532,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Local viewer for agentic-bo run artifacts.")
+    p = argparse.ArgumentParser(description="Local viewer for alphabo run artifacts.")
     p.add_argument("--root", default="results/logs", help="directory to scan for runs (default: results/logs)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
@@ -541,7 +620,7 @@ def main() -> None:
     Handler.root = Path(args.root)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"agentic-bo viewer serving {Handler.root.resolve()} at {url}  (Ctrl+C to stop)")
+    print(f"alphabo viewer serving {Handler.root.resolve()} at {url}  (Ctrl+C to stop)")
     if not args.no_browser:
         webbrowser.open(url)
     try:

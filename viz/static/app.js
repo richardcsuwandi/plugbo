@@ -1,4 +1,4 @@
-// agentic-bo local viewer. Vanilla JS, no build step, no external deps.
+// alphabo local viewer. Vanilla JS, no build step, no external deps.
 
 const state = {
   runs: [],
@@ -231,6 +231,7 @@ function runSearchParts(run) {
     run.model,
     run.run_kind,
     run.surrogate,
+    run.seed != null ? `seed ${run.seed}` : "",
     ...statusSearchTerms(run.status),
     ...extraNicknames(run),
   ];
@@ -245,6 +246,7 @@ function groupSearchParts(g) {
     g.caption,
     g.benchmark,
     g.benchmark_label,
+    g.seed != null ? `seed ${g.seed}` : "",
     ...(g.backends || []),
     ...(g.disclosures || []),
     ...(g.statuses || []).flatMap(statusSearchTerms),
@@ -525,11 +527,24 @@ function applySidebarModeUI(mode) {
   document.getElementById("experiments-sidebar").classList.toggle("is-hidden", mode !== "experiments");
 }
 
+function splitGroupRef(name) {
+  const sep = "::";
+  const raw = String(name || "");
+  const i = raw.lastIndexOf(sep);
+  if (i === -1) return { rel: raw, seed: null };
+  const rhs = raw.slice(i + sep.length);
+  if (!/^-?\d+$/.test(rhs)) return { rel: raw, seed: null };
+  return { rel: raw.slice(0, i), seed: Number(rhs) };
+}
+
 function runNameForCurrentExperiment() {
   const fromDetail = (state.groupDetail?.conditions || []).map((c) => c.run_name).find(Boolean);
   if (fromDetail) return fromDetail;
   if (!state.currentGroup) return null;
-  const match = state.runs.find((r) => r.group === state.currentGroup);
+  const { rel, seed } = splitGroupRef(state.currentGroup);
+  const match = state.runs.find(
+    (r) => r.group === rel && (seed == null || r.seed === seed || r.seed == null)
+  );
   return match ? match.name : null;
 }
 
@@ -600,7 +615,8 @@ function statusBadge(run) {
 function runTitle(run) {
   const backend = run.backend_label || run.condition || "";
   const bench = run.benchmark_label || "";
-  if (backend && bench) return `${backend} · ${bench}`;
+  const seedBit = run.seed != null ? ` · seed ${run.seed}` : "";
+  if (backend && bench) return `${backend} · ${bench}${seedBit}`;
   if (run.heading) return run.heading;
   if (backend) return backend;
   if (bench) return bench;
@@ -758,6 +774,12 @@ function runInfoRows(detail) {
   }
   rows.push(["Surrogate", shelf.surrogate === "cake" ? "CAKE (adaptive)" : "fixed Matérn"]);
   rows.push(["Acquisition", shelf.acqf]);
+  if (detail.regret && detail.regret.f_opt != null) {
+    rows.push(["True f_opt", fmtNum(detail.regret.f_opt, 6), "mono"]);
+  }
+  if (detail.regret && detail.regret.benchmark) {
+    rows.push(["True benchmark", detail.regret.benchmark, "mono"]);
+  }
   rows.push(["Started", startEpoch ? fmtAbsolute(startEpoch) : "-"]);
   rows.push(["Duration", fmtDuration(detail.duration_seconds)]);
   return rows;
@@ -832,6 +854,17 @@ function renderRun(detail) {
   if (detail.convergence && detail.convergence.points.length >= 2) {
     renderChart(document.getElementById("chart-wrap"), [{ name: detail.name, convergence: detail.convergence }]);
   }
+  if (detail.regret && detail.regret.points && detail.regret.points.length >= 2) {
+    const wrap = document.getElementById("overview-regret-wrap");
+    if (wrap) {
+      renderChart(wrap, [
+        {
+          name: "true regret",
+          convergence: { metric: "regret", minimize: true, points: detail.regret.points },
+        },
+      ]);
+    }
+  }
 }
 
 // -- run info + config -------------------------------------------------------------
@@ -854,6 +887,10 @@ function renderOverview(detail) {
     const best = pts[pts.length - 1].best;
     statCards += `<div class="stat"><div class="value">${fmtNum(best)}</div><div class="label">Best ${escapeHtml(detail.convergence.metric)}</div></div>`;
   }
+  if (detail.regret) {
+    statCards += `<div class="stat"><div class="value">${fmtNum(detail.regret.best, 6)}</div><div class="label">Best regret</div></div>`;
+    statCards += `<div class="stat"><div class="value">${fmtNum(detail.regret.eval1, 4)}</div><div class="label">Regret @ 1</div></div>`;
+  }
   const usage = detail.meta && detail.meta.usage;
   if (usage) {
     const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
@@ -873,9 +910,17 @@ function renderOverview(detail) {
         <div class="legend" id="chart-legend"></div>
       </div>`;
   } else if (shelf.objectives.length > 1) {
-    chartHtml = `<div class="card"><h3>Convergence</h3><div class="empty-note">Multi-objective study — convergence chart not shown (see Trials for the full Pareto history).</div></div>`;
+    chartHtml = `<div class="card"><h3>Convergence</h3><div class="empty-note">Multi-objective study: convergence chart not shown (see Trials for the full Pareto history).</div></div>`;
   } else {
     chartHtml = `<div class="card"><h3>Convergence</h3><div class="empty-note">Not enough observed evaluations yet.</div></div>`;
+  }
+  if (detail.regret && detail.regret.points && detail.regret.points.length >= 2) {
+    chartHtml += `
+      <div class="card">
+        <h3>True regret</h3>
+        <div class="chart-note">Best-so-far simple regret vs the hidden optimum.</div>
+        <div id="overview-regret-wrap"></div>
+      </div>`;
   }
 
   panel.innerHTML = `

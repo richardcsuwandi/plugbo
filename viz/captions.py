@@ -313,22 +313,33 @@ def classify_group(name: str) -> dict:
     }
 
 
-def _group_heading(leaf: str, parsed: dict) -> str:
+def _group_heading(leaf: str, parsed: dict, seed: int | None = None) -> str:
     bench = bench_label(parsed["benchmark"]) if parsed["benchmark"] else leaf.replace("-", " ")
     if parsed.get("seed") is not None:
         return f"{bench} · seed {parsed['seed']}"
     if parsed.get("context") == "domain":
-        return f"{bench} · domain context"
-    if parsed.get("context") == "generic":
-        return f"{bench} · generic context"
-    if parsed.get("context") == "misleading":
-        return f"{bench} · misleading prior"
-    if parsed["axis"] == "disclosure":
-        return f"{bench} · disclosure"
-    if parsed["disclosure"] == "shifted":
-        return f"{bench} · revealed+shifted"
-    if parsed["disclosure"] == "revealed":
-        return f"{bench} · revealed"
-    if parsed["disclosure"] == "blind":
-        return f"{bench} · blind"
-    return bench
+        heading = f"{bench} · domain context"
+    elif parsed.get("context") == "generic":
+        heading = f"{bench} · generic context"
+    elif parsed.get("context") == "misleading":
+        heading = f"{bench} · misleading prior"
+    elif parsed["axis"] == "disclosure":
+        heading = f"{bench} · disclosure"
+    elif parsed["disclosure"] == "shifted":
+        heading = f"{bench} · revealed+shifted"
+    elif parsed["disclosure"] == "revealed":
+        heading = f"{bench} · revealed"
+    elif parsed["disclosure"] == "blind":
+        heading = f"{bench} · blind"
+    else:
+        heading = bench
+    if seed is not None:
+        return f"{heading} · seed {seed}"
+    return heading
+
+
+def heading_with_seed(group_name: str, seed: int | None) -> str:
+    """Sidebar title for a compare group, with seed when sandboxes record one."""
+    leaf = group_name.rstrip("/").split("/")[-1]
+    parsed = parse_group_leaf(leaf)
+    return _group_heading(leaf, parsed, seed=seed)

@@ -850,7 +850,8 @@ tr:last-child td {
 
 /* -- chart -- */
 
-#chart-wrap {
+#chart-wrap,
+#overview-regret-wrap {
   position: relative;
 }
 

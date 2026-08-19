@@ -207,6 +207,41 @@ def test_find_compare_groups_started_at_falls_back_without_meta_timestamp(tmp_pa
     assert "2023" in groups[0]["started_at"] or "2024" in groups[0]["started_at"]
 
 
+def test_find_compare_groups_splits_extra_seeds(tmp_path):
+    for seed, token in ((42, "aaa"), (43, "bbb")):
+        run_dir = tmp_path / "ackley10-compare" / "vanilla" / f"sandbox_{token}"
+        run_dir.mkdir(parents=True)
+        _write_state(
+            run_dir / "state.json",
+            [{"metric": "y", "minimize": True}],
+            [{"trial_id": "a", "config": {"x": 0.1}, "metrics": {"y": float(seed)}, "status": "observed"}],
+        )
+        (run_dir / "run_meta.json").write_text(json.dumps({"seed": seed, "status": "completed"}))
+        cake = tmp_path / "ackley10-compare" / "cake" / f"sandbox_{token}c"
+        cake.mkdir(parents=True)
+        _write_state(
+            cake / "state.json",
+            [{"metric": "y", "minimize": True}],
+            [{"trial_id": "a", "config": {"x": 0.1}, "metrics": {"y": float(seed)}, "status": "observed"}],
+        )
+        (cake / "run_meta.json").write_text(json.dumps({"seed": seed, "status": "completed"}))
+
+    groups = find_compare_groups(tmp_path)
+    by_name = {g["name"]: g for g in groups}
+    assert set(by_name) == {"ackley10-compare::42", "ackley10-compare::43"}
+    assert by_name["ackley10-compare::42"]["heading"] == "Ackley-10 · blind · seed 42"
+    assert by_name["ackley10-compare::43"]["heading"] == "Ackley-10 · blind · seed 43"
+    assert by_name["ackley10-compare::42"]["seed"] == 42
+    assert by_name["ackley10-compare::42"]["n_conditions"] == 2
+
+    from viz.server import compare_group_detail, split_compare_ref
+
+    assert split_compare_ref("ackley10-compare::42") == ("ackley10-compare", 42)
+    detail = compare_group_detail(tmp_path, "ackley10-compare::42")
+    assert detail["title"] == "Ackley-10 · blind · seed 42"
+    assert detail["seed"] == 42
+
+
 def test_run_detail_includes_meta_and_duration(tmp_path):
     (tmp_path / "run1").mkdir()
     _write_state(tmp_path / "run1" / "state.json", [{"metric": "y", "minimize": True}], [])
@@ -253,6 +288,54 @@ def test_run_detail_explicit_lenz_kind_in_meta(tmp_path):
     (tmp_path / "vanilla" / "run_meta.json").write_text(json.dumps({"kind": "lenz", "policy": "vanilla"}))
     detail = run_detail(tmp_path, "vanilla")
     assert detail["run_kind"] == "lenz"
+
+
+def test_run_detail_includes_true_regret_from_answers(tmp_path):
+    from benchmarks.functions import get_spec, true_regret
+
+    run_dir = tmp_path / "hartmann6-compare" / "cake" / "sandbox_abc"
+    run_dir.mkdir(parents=True)
+    answers = run_dir.parent / "_answers"
+    answers.mkdir()
+    (answers / "abc.json").write_text(
+        json.dumps(
+            {
+                "benchmark": "hartmann6",
+                "param_names": list("abcdef"),
+                "shift_frac": [0.0] * 6,
+                "seed": 43,
+            }
+        )
+    )
+    trials = [
+        {"trial_id": "a", "config": {"a": 0.1}, "metrics": {"y": -3.0}, "status": "observed"},
+        {"trial_id": "b", "config": {"a": 0.2}, "metrics": {"y": -3.3211}, "status": "observed"},
+        {"trial_id": "c", "config": {"a": 0.3}, "metrics": {"y": -3.1}, "status": "observed"},
+    ]
+    _write_state(run_dir / "state.json", [{"metric": "y", "minimize": True}], trials)
+
+    detail = run_detail(tmp_path, "hartmann6-compare/cake/sandbox_abc")
+    spec = get_spec("hartmann6", 43)
+    assert detail["regret"] is not None
+    assert detail["regret"]["benchmark"] == "hartmann6"
+    assert detail["regret"]["f_opt"] == spec.f_opt
+    assert detail["regret"]["eval1"] == true_regret(spec, -3.0)
+    assert detail["regret"]["best"] == true_regret(spec, -3.3211)
+    assert detail["regret"]["trace"] == [
+        true_regret(spec, -3.0),
+        true_regret(spec, -3.3211),
+        true_regret(spec, -3.3211),
+    ]
+
+
+def test_run_detail_regret_missing_without_answers(tmp_path):
+    (tmp_path / "run1").mkdir()
+    trials = [
+        {"trial_id": "a", "config": {"x": 0.1}, "metrics": {"y": 1.0}, "status": "observed"},
+    ]
+    _write_state(tmp_path / "run1" / "state.json", [{"metric": "y", "minimize": True}], trials)
+    detail = run_detail(tmp_path, "run1")
+    assert detail["regret"] is None
 
 
 def test_run_detail_started_at_falls_back_to_trial_times(tmp_path):
