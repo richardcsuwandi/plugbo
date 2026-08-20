@@ -17,8 +17,9 @@ from llm.factory import get_client
 from lenz.llm_config import export_api_key, stamp_workdir
 
 from .functions import true_regret
-from .lenz_loop import create_and_warmup, warmup_n
+from .lenz_loop import create_and_warmup, lenz, warmup_n
 from .obfuscate import ObfuscatedBenchmark
+from .priors import get_prior_fixture
 from .sandbox import build_sandbox
 
 
@@ -112,13 +113,51 @@ def _lenz_create_args(
     return args
 
 
-def _backend_directive(n_warmup: int, budget: int, create_args: list[str]) -> str:
+def _configure_pinned_slots(
+    state_path: Path, region: str | None, prior: dict | None, decay_beta: float
+) -> None:
+    """Occupies the region/prior slots the same way the scripted baseline
+    does (`run_blind_baseline._configure_slots`): after the shared warm-start,
+    before the policy loop starts. Called before sara's first turn so the
+    slot is a pinned experimental condition, not something she chose.
+    """
+    if region == "turbo":
+        lenz(state_path, "set-region", "--policy", "turbo")
+    if prior:
+        lenz(
+            state_path,
+            "set-belief",
+            "--prior",
+            json.dumps(prior),
+            "--decay-beta",
+            str(decay_beta),
+        )
+
+
+def _backend_directive(
+    n_warmup: int,
+    budget: int,
+    create_args: list[str],
+    region: str | None = None,
+    prior: dict | None = None,
+) -> str:
     """Pins the backend configuration sara would otherwise choose herself,
     so `--surrogate`/`--acqf` are controlled experimental conditions rather
     than left to the agent's judgment (e.g. for a vanilla-vs-cake comparison
     at fixed acquisition function).
     """
     flags = " ".join(create_args)
+    pinned_verbs = ["`set-acqf`", "`set-surrogate`"]
+    if region == "turbo":
+        pinned_verbs.append("`set-region`")
+    if prior:
+        pinned_verbs.append("`set-belief`")
+    pinned = " or ".join(pinned_verbs)
+    extra_notes = ""
+    if region == "turbo":
+        extra_notes += " The region policy is already pinned to TuRBO's trust region."
+    if prior:
+        extra_notes += " A prior belief is already pinned via `set-belief` -- it decays automatically over the campaign."
     if n_warmup > 0:
         return (
             "\n\nBackend configuration (fixed for this experiment -- follow exactly, do not deviate): "
@@ -126,14 +165,14 @@ def _backend_directive(n_warmup: int, budget: int, create_args: list[str]) -> st
             f"evaluations already recorded (they count toward the budget of {budget}). "
             "Do not call `lenz create` -- that would wipe the shared initial design. "
             "Continue from the existing state. "
-            "Do not call `set-acqf` or `set-surrogate` at any point during the run -- keep both fixed "
-            "for the entire campaign, even if you'd otherwise want to adapt them."
+            f"Do not call {pinned} at any point during the run -- keep them fixed "
+            f"for the entire campaign, even if you'd otherwise want to adapt them.{extra_notes}"
         )
     return (
         "\n\nBackend configuration (fixed for this experiment -- follow exactly, do not deviate): "
         f"when you call `lenz create`, pass `{flags}`. "
-        "Do not call `set-acqf` or `set-surrogate` at any point during the run -- keep both fixed "
-        "for the entire campaign, even if you'd otherwise want to adapt them."
+        f"Do not call {pinned} at any point during the run -- keep them fixed "
+        f"for the entire campaign, even if you'd otherwise want to adapt them.{extra_notes}"
     )
 
 
@@ -148,6 +187,9 @@ def run_blind_test(
     api_key: str | None = None,
     surrogate: str = "fixed",
     acqf: str = "noisy_logei",
+    region: str = "box",
+    prior: dict | None = None,
+    decay_beta: float = 10.0,
     kernel_llm_provider: str | None = None,
     kernel_llm_model: str | None = None,
     kernel_llm_base_url: str | None = None,
@@ -219,6 +261,7 @@ def run_blind_test(
         already = create_and_warmup(
             sandbox, ob.unit_space_json(), create_args, n_warm, budget, objectives=ob.objectives_json()
         )
+        _configure_pinned_slots(sandbox / "state.json", region, prior, decay_beta)
         cake_override = {}
         if kernel_llm_provider and kernel_llm_model:
             cake_override = {
@@ -241,7 +284,7 @@ def run_blind_test(
             cake_override,
         )
         user_prompt = _user_prompt((sandbox / "context.md").read_text(), "./oracle", budget)
-        user_prompt += _backend_directive(already, budget, create_args)
+        user_prompt += _backend_directive(already, budget, create_args, region=region, prior=prior)
         system_prompt = _system_prompt()
 
     parsed_extra_body = json.loads(extra_body) if extra_body else None
@@ -261,6 +304,8 @@ def run_blind_test(
         "status": "running",
         "surrogate": "none" if no_lenz else surrogate,
         "acqf": "none" if no_lenz else acqf,
+        "region": "none" if no_lenz else region,
+        "prior": "none" if (no_lenz or not prior) else "pibo",
         "seed": seed,
         "warmup": already,
         "no_lenz": no_lenz,
@@ -319,6 +364,11 @@ def main() -> None:
     p.add_argument("--warmup", type=int, default=None, help="shared Sobol evaluations before sara starts (default: d+1 when --seed is set, else 0)")
     p.add_argument("--surrogate", default="fixed", choices=["fixed", "cake"], help="pinned for the whole run; sara is instructed not to change it")
     p.add_argument("--acqf", default="noisy_logei", help="pinned for the whole run; sara is instructed not to change it")
+    p.add_argument("--region", default="box", choices=["box", "turbo"], help="pinned for the whole run, set right after the shared warm-start")
+    prior_group = p.add_mutually_exclusive_group()
+    prior_group.add_argument("--prior", default=None, help="πBO belief JSON, pinned via set-belief after warm-start")
+    prior_group.add_argument("--prior-fixture", default=None, help="named deterministic belief fixture (see benchmarks/priors.py)")
+    p.add_argument("--decay-beta", type=float, default=10.0, help="πBO decay coefficient")
     p.add_argument("--kernel-llm-provider", default=None, help="CAKE override; defaults to --provider/--model")
     p.add_argument("--kernel-llm-model", default=None, help="CAKE override; defaults to --provider/--model")
     p.add_argument("--kernel-llm-base-url", default=None, help="required if --kernel-llm-provider is openai-compatible")
@@ -332,6 +382,10 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    prior = json.loads(args.prior) if args.prior else None
+    if args.prior_fixture:
+        prior = get_prior_fixture(args.benchmark, args.prior_fixture)
+
     result = run_blind_test(
         benchmark_name=args.benchmark,
         provider=args.provider,
@@ -343,6 +397,9 @@ def main() -> None:
         api_key=args.api_key,
         surrogate=args.surrogate,
         acqf=args.acqf,
+        region=args.region,
+        prior=prior,
+        decay_beta=args.decay_beta,
         kernel_llm_provider=args.kernel_llm_provider,
         kernel_llm_model=args.kernel_llm_model,
         kernel_llm_base_url=args.kernel_llm_base_url,

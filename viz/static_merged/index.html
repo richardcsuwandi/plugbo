@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>plugbo merged viewer</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>plugbo <span class="sub-label">merged</span></h1>
+      <button id="theme-toggle" title="Toggle theme">◐</button>
+    </div>
+    <p id="sidebar-note">Compare groups with 2+ seeds. Curves are mean best-so-far regret &plusmn; standard error across seeds.</p>
+    <ul id="group-list"></ul>
+    <div id="empty-state" style="display:none">
+      No multi-seed compare groups found under <code>--root</code>.
+    </div>
+  </div>
+  <div id="main">
+    <div id="empty-main" class="empty-note">Select a compare group.</div>
+    <div id="group-view" style="display:none">
+      <div id="main-header">
+        <div>
+          <h2 id="group-title"></h2>
+          <div class="sub" id="group-caption"></div>
+        </div>
+      </div>
+      <div id="chart-container" class="regret-chart"></div>
+      <table id="summary-table">
+        <thead>
+          <tr>
+            <th>Condition</th>
+            <th>Seeds</th>
+            <th>Final regret (mean &plusmn; SE)</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="summary-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div id="tooltip" class="regret-tooltip"></div>
+<script src="/merged.js"></script>
+</body>
+</html>

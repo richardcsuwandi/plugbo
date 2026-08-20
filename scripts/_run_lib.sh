@@ -1,6 +1,9 @@
 # Sourced by run_synthetic.sh and run_bolt.sh after _compare_env.sh.
 # Shared: skip-if-done, LLM flags, one backend × disclosure leg.
 
+# Line-buffer Python so `> log 2>&1 &` shows eval progress immediately.
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+
 FORCE="${FORCE:-0}"
 LIST="${LIST:-0}"
 BUDGET="${BUDGET:-100}"
@@ -19,16 +22,16 @@ skip_or_run() {
   local label="$2"
   shift 2
   local st
-  st=$(condition_status "$cond_dir")
+  st=$(condition_status "$cond_dir" "${SEED:-}")
   if [ "$FORCE" != "1" ]; then
     case "$st" in
       completed|running)
-        echo "SKIP  $label  ($st)"
+        echo "SKIP  $label  seed=${SEED:-?} ($st)"
         return 0
         ;;
     esac
   fi
-  echo "RUN   $label  (status=$st)"
+  echo "RUN   $label  seed=${SEED:-?} (status=$st)"
   if [ "$LIST" = "1" ]; then
     return 0
   fi
@@ -129,8 +132,35 @@ run_leg() {
           --context-variant "$CONTEXT_VARIANT"
       fi
       ;;
+    sara-lenz-turbo)
+      # Region slot pinned to TuRBO under the agent, mirroring how
+      # sara-lenz-cake pins the surrogate slot -- tests whether the surrogate
+      # slot's high variance under an agent (see the blog's Hartmann6 vs
+      # Ackley10 discussion) is CAKE-specific or a general pinned-plugin effect.
+      if [ "$disclosure" = "blind" ]; then
+        skip_or_run "$out" "$label" python3 -m benchmarks.run_blind_test \
+          "${sara[@]}" --surrogate fixed --region turbo
+      else
+        skip_or_run "$out" "$label" python3 -m benchmarks.run_noblind_test \
+          "${sara[@]}" --surrogate fixed --region turbo "${shift_args[@]+"${shift_args[@]}"}" \
+          --context-variant "$CONTEXT_VARIANT"
+      fi
+      ;;
+    sara-lenz-pibo)
+      # Prior slot pinned to a scripted pi-BO belief under the agent. Belief
+      # fixtures are deterministic and currently only defined for bolt_lora
+      # (benchmarks/priors.py), matching the scripted `pibo` baseline.
+      if [ "$disclosure" != "blind" ] && [ "$bench" = "bolt_lora" ]; then
+        skip_or_run "$out" "$label" python3 -m benchmarks.run_noblind_test \
+          "${sara[@]}" --surrogate fixed --prior-fixture "bolt-$CONTEXT_VARIANT" \
+          "${shift_args[@]+"${shift_args[@]}"}" --context-variant "$CONTEXT_VARIANT"
+      else
+        echo "error: sara-lenz-pibo currently requires bolt_lora (revealed) -- belief fixtures are bolt-only" >&2
+        return 1
+      fi
+      ;;
     *)
-      echo "error: unknown backend '$backend' (vanilla, cake, turbo, sara-lenz, sara-lenz-cake, sara-only)" >&2
+      echo "error: unknown backend '$backend' (vanilla, cake, turbo, sara-lenz, sara-lenz-cake, sara-only, sara-lenz-turbo, sara-lenz-pibo)" >&2
       return 1
       ;;
   esac

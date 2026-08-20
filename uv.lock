@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "alphabo"
+name = "plugbo"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

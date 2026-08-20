@@ -1,6 +1,14 @@
-# AlphaBO
+# PlugBO
 
 A modular framework for **agentic Bayesian optimization**.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml/badge.svg)](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml)
+
+[Install](#install) · [Plugins](#plugins) · [Experiments](#experiments) · [Contributing](#contributing)
+
+![PlugBO architecture](assets/architecture.svg)
 
 Bayesian optimization (BO) uses a probabilistic surrogate to choose each
 evaluation, but its overall search strategy is usually fixed in advance.
@@ -12,45 +20,79 @@ objectives, or constraints [[1]](#ref-1).
 
 Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
 instantiates that idea as Sara, a campaign LLM, calling lenz, a BoTorch CLI that
-owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6). AlphaBO keeps that agent and CLI, then turns the backend into a
-plug-in surface: surrogate, region, prior, and sampler are slots. Classical BO
-methods wrap as `lenz` verbs the agent can enable, inspect, or override. The
-control plane matches [MCP](https://modelcontextprotocol.io/). Sara's tools
-remain `bash` and `read`, and plugins register extra verbs on that surface
-instead of adding a second agent.
+owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6).
+PlugBO keeps that agent and CLI, then turns the backend into a plugin surface:
+surrogate, region, prior, and sampler are slots. Classical BO methods wrap as
+`lenz` verbs the agent can enable, inspect, or override. The arrangement is
+analogous to [MCP](https://modelcontextprotocol.io/): Sara is the host, with
+only `bash` and `read`, and lenz is the shared tool surface. A BO method
+registers extra verbs there the way an MCP server registers tools, so the agent
+stays fixed while the surrogate, region, prior, or sampler can be swapped in as
+a plugin.
 
-![AlphaBO architecture](assets/architecture.svg)
+> Note: This is an independent re-implementation of Sara and lenz [[1]](#ref-1).
+> It is not an official Meta repository.
 
-This is an independent re-implementation of Sara and lenz [[1]](#ref-1). It is not an official Meta repository.
+#### Why PlugBO?
 
-The plugin protocol is new in this implementation. Methods wrap as backend
-capabilities the agent invokes:
+* Sara stays a two-tool agent (`bash`, `read`). New capability is a `lenz`
+  verb, not a new agent tool, so the agent surface does not grow per method.
+* Classical BO methods (CAKE, TuRBO, πBO, LLAMBO) occupy plugin slots
+  (surrogate, region, prior, sampler) instead of forking the optimization
+  loop.
+* Ships an anti-memorization benchmarking harness: blind/revealed disclosure
+  levels and `gp_sample<dim>` no-prior controls, so an LLM-in-the-loop
+  comparison is not secretly a retrieval test.
+* Cross-seed aggregation and a merged viewer (`viz/aggregate.py`,
+  `viz/merged_server.py`) read a condition as a mean ± SE band across seeds
+  instead of one noisy line.
 
-| Slot | Default | Plugin | Verbs |
-|---|---|---|---|
-| Surrogate | fixed Matérn | **CAKE** [[2]](#ref-2) | `set-surrogate`, `evolve-kernels`, `kernel-population` |
-| Region | box | **TuRBO** [[3]](#ref-3) | `set-region`, `set-bounds`, `turbo status` |
-| Prior | none | **πBO** [[4]](#ref-4) | `set-belief` |
-| Sampler | BoTorch | **LLAMBO** [[5]](#ref-5) | `set-sampler`, `llambo sample` |
-
-Sara still has only `bash` and `read`. Occupying a slot is a `set-*` verb.
-Plugins may add more verbs. Method state lives in `state.json` under
-`plugins`, not on the live shelf. Reconfiguring never discards trials.
-
-`--no-lenz` drops the backend: Sara proposes configs and calls `./oracle`
-herself (the test of whether the LLM can be the optimizer).
+---
 
 ## Install
 
+Not on PyPI. Two ways to install from source (Python 3.10+):
+
+**Editable install**
+
 ```bash
+git clone https://github.com/richardcsuwandi/plugbo.git
+cd plugbo
 pip install -e .
 ```
 
-Requires Python 3.10+. Dependencies include `torch`, `gpytorch`, `botorch`, and
-LLM clients (`anthropic`, `openai`). Copy `.env.example` to `.env` for API
-credentials.
+That pulls `torch`, `gpytorch`, `botorch`, and LLM clients (`anthropic`,
+`openai`). Copy `.env.example` to `.env` if you will call an LLM.
 
-## `lenz` (no LLM required)
+**Dev install** (tests, plus the LoRA HPO emulator extra)
+
+```bash
+pip install -e ".[dev]"    # tests
+pip install -e ".[bolt]"   # LoRA HPO emulator (BoLT)
+```
+
+---
+
+## Plugins
+
+Sara, lenz, and the BO methods are the same kind of piece: modules on one
+control plane. Sara is the host (`bash` and `read`). lenz is the tool surface.
+CAKE, TuRBO, πBO, and LLAMBO occupy slots on that surface.
+
+| Module | Role | Default | Occupant | Commands |
+|---|---|---|---|---|
+| `sara` | campaign agent | — | — | `sara run` |
+| `lenz` | trial log, posterior, acquisition | BoTorch loop | — | `create`, `suggest`, `submit`, `incumbent` |
+| Surrogate | GP | fixed Matérn | **CAKE** [[2]](#ref-2) | `set-surrogate`, `evolve-kernels`, `kernel-population` |
+| Region | search bounds | box | **TuRBO** [[3]](#ref-3) | `set-region`, `set-bounds`, `turbo status` |
+| Prior | belief | none | **πBO** [[4]](#ref-4) | `set-belief` |
+| Sampler | candidates | BoTorch | **LLAMBO** [[5]](#ref-5) | `set-sampler`, `llambo sample` |
+
+Occupying a slot is a `set-*` verb. Plugins may add more verbs. Method state
+lives in `state.json` under `plugins`, not on the live shelf. Reconfiguring
+never discards trials. `lenz plugins` lists installed modules.
+
+Vanilla loop (no LLM):
 
 ```bash
 lenz create --state ./state.json \
@@ -63,9 +105,7 @@ lenz submit --state ./state.json --config '{"x1":1.0,"x2":2.0}' --metrics '{"y":
 lenz incumbent --state ./state.json
 ```
 
-Command reference: `sara/prompts/LENZ_REF.md`.
-
-## `sara` (the agent)
+Agent in the loop:
 
 ```bash
 sara run \
@@ -76,8 +116,9 @@ sara run \
   --workdir ./results/logs/branin-1
 ```
 
-Required flags: `--context` (problem markdown), `--eval` (command that takes one
-config JSON), `--budget`, `--workdir`.
+`--context` is problem markdown, `--eval` is a command that takes one config
+JSON. `--no-lenz` drops the backend: Sara proposes configs and calls
+`./oracle` herself.
 
 | `--provider` | Notes |
 |---|---|
@@ -86,11 +127,7 @@ config JSON), `--budget`, `--workdir`.
 | `openai-compatible` | Requires `--base-url` |
 | `ollama` | `http://localhost:11434/v1` by default |
 
-CAKE and LLAMBO inherit Sara's provider and model. Pass `--kernel-llm-*` or
-`--sampler-llm-*` only to use a different model. TuRBO and πBO do not call an
-LLM.
-
-## Plugins
+Occupy a slot, with or without the agent:
 
 ```bash
 lenz set-surrogate --state ./state.json --surrogate cake
@@ -99,18 +136,23 @@ lenz set-belief --state ./state.json --prior '{"x":{"dist":"normal","mu":0.3,"si
 lenz set-sampler --state ./state.json --sampler llambo
 ```
 
-`lenz plugins` lists installed modules. Add a method by implementing
-`LenzPlugin` in `lenz/plugins/` with a `PROMPT.md` beside it.
-
-CAKE evolves a GP kernel population inside `lenz` during `observe`/`submit`
-[[2]](#ref-2). It is not part of Sara's conversation.
-
 ```bash
 lenz create --state ./state.json \
   --space '{"x1":{"kind":"range","lower":-5,"upper":10},"x2":{"kind":"range","lower":0,"upper":15}}' \
   --objectives '{"y":"minimize"}' \
   --surrogate cake --budget 30
 ```
+
+CAKE and LLAMBO inherit Sara's provider and model. Pass `--kernel-llm-*` or
+`--sampler-llm-*` only to use a different model. TuRBO and πBO do not call an
+LLM. CAKE evolves a GP kernel population inside `lenz` during
+`observe`/`submit` [[2]](#ref-2); that trace is not part of Sara's conversation.
+
+Command reference: `sara/prompts/LENZ_REF.md`. To add a method, implement
+`LenzPlugin` in `lenz/plugins/`, ship a `{name}.md` prompt beside it, and
+register it in `registry.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
 
 ## Experiments
 
@@ -143,8 +185,11 @@ warm-start:
 ./scripts/rerun_sara_only.sh hartmann6
 ```
 
-BoLT LoRA is mixed-type HPO [[7]](#ref-7) (always revealed, no textbook
-optimum):
+### LoRA optimization
+
+The mixed-type experiment is LoRA hyperparameter optimization on
+BoLT (Black-box Optimization for LLM Tasks) [[7]](#ref-7), a benchmark
+of expensive LLM objectives (always revealed, no textbook optimum):
 
 ```bash
 pip install -e '.[bolt]'
@@ -159,6 +204,8 @@ Provider and model come from `.env` or `PROVIDER` / `MODEL`. Completed and
 in-flight legs are skipped. Plots land in `compare.html` next to the run, or
 open `sara-viz`.
 
+---
+
 ## Run viewer (`sara-viz`)
 
 ```bash
@@ -166,21 +213,49 @@ sara-viz
 sara-viz --root ./results/logs --port 9000
 ```
 
+---
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest -m "not slow"
 ./scripts/smoke_plugins.sh
-./scripts/smoke_plugins.sh --live
 ```
 
-`--live` issues one CAKE evolve and one LLAMBO sample. `--baseline` adds short
-Hartmann6 vanilla and TuRBO loops.
+Optional smoke flags and what they cover are in
+[CONTRIBUTING.md](CONTRIBUTING.md). The script header is the source of truth
+for `--live`, `--baseline`, and any later flags.
+
+---
+
+## Contributing
+
+Bug reports, new BO plugins, and benchmarks are welcome.
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, plugin protocol, adding a function
+- [Issues](https://github.com/richardcsuwandi/plugbo/issues): bugs and proposals
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+
+Please open an issue before a new slot, a large dependency, or a new
+experiment backend.
+
+---
+
+## Citation
+
+If you use PlugBO, please cite this repository (GitHub's cite button uses
+[`CITATION.cff`](CITATION.cff)) and the papers for Sara/lenz and any plugins
+you enable. The Sara/lenz design is Brunzema et al. [[1]](#ref-1). This repo
+is an independent re-implementation.
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Contributions are under the same license.
+
+---
 
 ## References
 

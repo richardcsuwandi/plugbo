@@ -1,4 +1,4 @@
-// alphabo local viewer. Vanilla JS, no build step, no external deps.
+// plugbo local viewer. Vanilla JS, no build step, no external deps.
 
 const state = {
   runs: [],

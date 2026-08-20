@@ -10,6 +10,10 @@
 # --context    domain (default) | generic | misleading
 # Completed and in-flight legs are skipped; pass --force to rerun.
 set -euo pipefail
+# Interactive zsh stops a background job that writes to the terminal
+# ("suspended (tty output)"). Ignore SIGTTOU/SIGTTIN so `cmd > log 2>&1 &`
+# keeps running; children inherit this. Redirects still capture the logs.
+trap '' TTOU TTIN
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 BACKEND="vanilla,cake,sara-lenz,sara-lenz-cake,sara-only"

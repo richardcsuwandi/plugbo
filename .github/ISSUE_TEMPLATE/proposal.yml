@@ -1,0 +1,30 @@
+name: Proposal
+description: A plugin, benchmark, example, or other change
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Open this before a large PR (new slot, new dependency, new experiment backend). Smaller fixes can go straight to a pull request. See [CONTRIBUTING.md](https://github.com/richardcsuwandi/plugbo/blob/main/CONTRIBUTING.md).
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of change
+      options:
+        - Plugin / BO method
+        - Benchmark
+        - Example
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What do you want to add or change
+    validations:
+      required: true
+  - type: textarea
+    id: fit
+    attributes:
+      label: How it fits
+      description: For a method, which slot would it occupy. For a benchmark, closed-form or mixed-type.

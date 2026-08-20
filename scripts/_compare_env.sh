@@ -9,7 +9,7 @@ if [ -f .env ]; then
 fi
 
 PROVIDER="${PROVIDER:-openai-compatible}"
-MODEL="${MODEL:-Qwen-Ambassador/Qwen3.7-Max}"
+MODEL="${MODEL:-Qwen-Ambassador/Qwen3.8-Max}"
 
 # MODELSCOPE_* creds only apply when we're actually pointed at ModelScope --
 # if PROVIDER is overridden (e.g. anthropic/openai), leave BASE_URL/API_KEY
@@ -51,16 +51,29 @@ is_constrained_benchmark() {
 
 # Latest sandbox_*/run_meta.json status under a condition dir: completed,
 # running, failed, missing, or unknown. Used by compare scripts that skip
-# already-finished legs on rerun.
+# already-finished legs on rerun. Optional $2 restricts to that seed so a
+# finished seed-42 sandbox does not skip seed 43 in the same directory.
 condition_status() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${2:-}" <<'PY'
 from pathlib import Path
 import json, sys
 d = Path(sys.argv[1])
+seed_s = sys.argv[2] if len(sys.argv) > 2 else ""
 if not d.is_dir():
     print("missing")
     raise SystemExit
 metas = list(d.glob("sandbox_*/run_meta.json"))
+if seed_s:
+    want = int(seed_s)
+    matched = []
+    for path in metas:
+        try:
+            meta = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("seed") == want:
+            matched.append(path)
+    metas = matched
 if not metas:
     print("missing")
     raise SystemExit

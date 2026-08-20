@@ -3,12 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "alphabo"
+name = "plugbo"
 version = "0.2.0"
-description = "AlphaBO: plug-in agentic Bayesian optimization (Sara + lenz)"
+description = "PlugBO: plug-in agentic Bayesian optimization (Sara + lenz)"
 readme = "README.md"
 license = {text = "MIT"}
+authors = [
+    {name = "Richard Cornelius Suwandi", email = "richardsuwandi@link.cuhk.edu.cn"},
+]
 requires-python = ">=3.10"
+keywords = ["bayesian-optimization", "llm", "agents", "botorch"]
 dependencies = [
     "torch>=2.1",
     "gpytorch>=1.11",
@@ -20,6 +24,11 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/richardcsuwandi/plugbo"
+Repository = "https://github.com/richardcsuwandi/plugbo"
+Issues = "https://github.com/richardcsuwandi/plugbo/issues"
+
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
 bolt = ["huggingface_hub>=0.24", "safetensors>=0.4"]
@@ -29,12 +38,13 @@ lenz = "lenz.cli:main"
 sara = "sara.cli:main"
 sara-blind-test = "benchmarks.run_blind_test:main"
 sara-viz = "viz.server:main"
+sara-viz-merged = "viz.merged_server:main"
 
 [tool.setuptools.packages.find]
 include = ["lenz*", "sara*", "benchmarks*", "llm*", "viz*"]
 
 [tool.setuptools.package-data]
-viz = ["static/*"]
+viz = ["static/*", "static_merged/*"]
 lenz = ["plugins/*.md"]
 
 [tool.pytest.ini_options]

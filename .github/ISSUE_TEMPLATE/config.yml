@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/richardcsuwandi/plugbo/blob/main/CONTRIBUTING.md
+    about: How to add a plugin, benchmark, or example
+  - name: Security report
+    url: https://github.com/richardcsuwandi/plugbo/security/advisories/new
+    about: Report a vulnerability privately, not as a public issue

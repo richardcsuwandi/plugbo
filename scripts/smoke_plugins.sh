@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test AlphaBO plugins before a v1 push or a real experiment sweep.
+# Smoke-test PlugBO plugins before a v1 push or a real experiment sweep.
 #
 # Default (no API): unit tests + CLI wiring + short Branin loops
 # (vanilla, TuRBO, πBO). CAKE/LLAMBO are checked for inheritance/wiring only.

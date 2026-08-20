@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below, and cite the papers for Sara/lenz and any plugins you enable.
+type: software
+title: "PlugBO: A modular framework for agentic Bayesian optimization"
+authors:
+  - family-names: Suwandi
+    given-names: Richard Cornelius
+    email: richardsuwandi@link.cuhk.edu.cn
+repository-code: https://github.com/richardcsuwandi/plugbo
+url: https://github.com/richardcsuwandi/plugbo
+license: MIT
+version: 0.2.0
+date-released: "2026-08-20"

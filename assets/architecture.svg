@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
-  <title id="title">AlphaBO architecture, capability-centric view</title>
-  <desc id="desc">A compact hub-and-spoke view of AlphaBO. Sara controls a lenz state engine, exchanges configurations and metrics with an evaluator, and selects among CAKE, TuRBO, piBO, and LLAMBO capabilities.</desc>
+  <title id="title">PlugBO architecture, capability-centric view</title>
+  <desc id="desc">A compact hub-and-spoke view of PlugBO. Sara controls a lenz state engine, exchanges configurations and metrics with an evaluator, and selects among CAKE, TuRBO, piBO, and LLAMBO capabilities.</desc>
 
   <defs>
     <marker id="arrow" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
@@ -29,7 +29,7 @@
 
   <!-- Heading -->
   <g class="sans">
-    <text x="600" y="48" text-anchor="middle" class="title">AlphaBO</text>
+    <text x="600" y="48" text-anchor="middle" class="title">PlugBO</text>
   </g>
 
   <!-- Run specification -->

@@ -1,4 +1,4 @@
-"""AlphaBO plugin registry: CAKE, TuRBO, πBO, LLAMBO, …"""
+"""PlugBO plugin registry: CAKE, TuRBO, πBO, LLAMBO, …"""
 
 from .base import (
     SLOT_PRIOR,

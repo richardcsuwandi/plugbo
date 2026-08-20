@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test AlphaBO plugin *capabilities* (no Sara).
+"""Smoke-test PlugBO plugin *capabilities* (no Sara).
 
 Default (no network): registry, CLI verbs, TuRBO trust region, πBO scoring,
 CAKE/LLAMBO wiring, and short Branin loops for vanilla / turbo / pibo.
@@ -246,7 +246,7 @@ def main() -> int:
     parser.add_argument("--workdir", default=None, help="keep state.json here instead of a temp dir")
     args = parser.parse_args()
 
-    workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="alphabo-smoke-"))
+    workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="plugbo-smoke-"))
     workdir.mkdir(parents=True, exist_ok=True)
     state = workdir / "state.json"
     print(f"workdir: {workdir}")

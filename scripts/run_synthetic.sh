@@ -9,8 +9,13 @@
 #
 # --disclosure  blind | revealed | revealed-shift | all
 # --backend     comma list, or all (vanilla,sara-lenz,sara-lenz-cake)
+# --warmup     shared Sobol evaluations (default: d+1 with a seed)
 # Completed and in-flight legs are skipped; pass --force to rerun.
 set -euo pipefail
+# Interactive zsh stops a background job that writes to the terminal
+# ("suspended (tty output)"). Ignore SIGTTOU/SIGTTIN so `cmd > log 2>&1 &`
+# keeps running; children inherit this. Redirects still capture the logs.
+trap '' TTOU TTIN
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 DISCLOSURE="blind"
@@ -20,6 +25,7 @@ FORCE=0
 LIST=0
 BUDGET=100
 SEED=42
+WARMUP=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,6 +43,10 @@ while [ $# -gt 0 ]; do
       ;;
     --seed)
       SEED="${2:?}"
+      shift 2
+      ;;
+    --warmup)
+      WARMUP="${2:?}"
       shift 2
       ;;
     --root)
@@ -58,7 +68,7 @@ done
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 if [ -z "${1:-}" ]; then
-  echo "usage: $0 <benchmark> [--disclosure blind|revealed|revealed-shift|all] [--backend LIST] [--budget N] [--seed N]" >&2
+  echo "usage: $0 <benchmark> [--disclosure blind|revealed|revealed-shift|all] [--backend LIST] [--budget N] [--seed N] [--warmup N]" >&2
   echo "  <benchmark>: one of $(python3 -c 'from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))'), or gp_sample<dim>" >&2
   exit 1
 fi
@@ -73,7 +83,7 @@ case "$DISCLOSURE" in
 esac
 
 source scripts/_compare_env.sh
-export FORCE LIST BUDGET SEED
+export FORCE LIST BUDGET SEED WARMUP
 source scripts/_run_lib.sh
 
 BACKENDS="$(expand_backends "$BACKEND" "vanilla,sara-lenz,sara-lenz-cake")"
@@ -86,7 +96,7 @@ if [ "$DISCLOSURE" = "all" ] && [ "$N_BACKENDS" -ne 1 ]; then
   exit 1
 fi
 
-echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED disclosure=$DISCLOSURE backend=$BACKENDS provider=$PROVIDER model=$MODEL"
+echo "benchmark=$BENCHMARK budget=$BUDGET seed=$SEED warmup=${WARMUP:-auto} disclosure=$DISCLOSURE backend=$BACKENDS provider=$PROVIDER model=$MODEL"
 echo
 
 if [ "$DISCLOSURE" = "all" ]; then

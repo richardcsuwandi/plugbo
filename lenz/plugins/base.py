@@ -1,4 +1,4 @@
-"""Plugin protocol for AlphaBO / lenz.
+"""Plugin protocol for PlugBO / lenz.
 
 A plugin occupies one slot of the live policy (surrogate, region, sampler,
 prior) and stores its own blob under ``frame.plugins[name]``. Core never

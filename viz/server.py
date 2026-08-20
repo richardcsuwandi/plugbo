@@ -1,4 +1,4 @@
-"""A minimal local viewer for alphabo run artifacts (state.json,
+"""A minimal local viewer for plugbo run artifacts (state.json,
 trace.jsonl, run_meta.json) under `--root` (default: results/logs). Stdlib
 only, no new dependencies: `python3 -m viz.server`.
 """
@@ -611,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Local viewer for alphabo run artifacts.")
+    p = argparse.ArgumentParser(description="Local viewer for plugbo run artifacts.")
     p.add_argument("--root", default="results/logs", help="directory to scan for runs (default: results/logs)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
@@ -620,7 +620,7 @@ def main() -> None:
     Handler.root = Path(args.root)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"alphabo viewer serving {Handler.root.resolve()} at {url}  (Ctrl+C to stop)")
+    print(f"plugbo viewer serving {Handler.root.resolve()} at {url}  (Ctrl+C to stop)")
     if not args.no_browser:
         webbrowser.open(url)
     try:

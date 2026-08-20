@@ -29,11 +29,33 @@ from .obfuscate import ObfuscatedBenchmark
 COLORS = ["#4C78A8", "#F58518", "#54A24B", "#B279A2", "#E45756", "#72B7B2", "#EECA3B", "#9D755D"]
 
 
-def _pick_state(condition_dir: Path) -> Path | None:
+def _sandbox_seed(run_dir: Path) -> int | None:
+    """Seed recorded in this sandbox's run_meta.json, or None if missing."""
+    meta_path = run_dir / "run_meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    seed = meta.get("seed")
+    if isinstance(seed, bool) or seed is None:
+        return None
+    if isinstance(seed, int):
+        return seed
+    if isinstance(seed, str) and seed.lstrip("-").isdigit():
+        return int(seed)
+    return None
+
+
+def _pick_state(condition_dir: Path, seed: int | None = None) -> Path | None:
     """Latest sandbox in this condition dir (by state.json mtime), not the
-    lexicographically first leftover run.
+    lexicographically first leftover run. Optional `seed` keeps extra-seed
+    sandboxes from overlaying each other in the viewer.
     """
     candidates = [p for p in condition_dir.glob("sandbox_*/state.json") if p.is_file()]
+    if seed is not None:
+        candidates = [p for p in candidates if _sandbox_seed(p.parent) == seed]
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
@@ -92,21 +114,34 @@ def regret_trace_for_state(state_path: Path, condition_dir: Path | None = None) 
     return trace
 
 
-def regret_trace(condition_dir: Path) -> list[float] | None:
+def regret_trace(condition_dir: Path, seed: int | None = None) -> list[float] | None:
     """Best-so-far trace from the latest sandbox in a condition directory."""
-    state_path = _pick_state(condition_dir)
+    state_path = _pick_state(condition_dir, seed=seed)
     if state_path is None:
         return None
     return regret_trace_for_state(state_path, condition_dir)
 
 
-def is_scorable(condition_dir: Path) -> bool:
+def is_scorable(condition_dir: Path, seed: int | None = None) -> bool:
     """True when this condition has a sandbox plus matching _answers secret."""
-    state_path = _pick_state(condition_dir)
+    state_path = _pick_state(condition_dir, seed=seed)
     if state_path is None:
         return False
     token = state_path.parent.name.removeprefix("sandbox_")
     return (condition_dir / "_answers" / f"{token}.json").is_file()
+
+
+def _run_meta_status(run_dir: Path) -> str | None:
+    """`run_meta.json`'s recorded status ("running"/"failed"/"completed") for
+    this sandbox, or None if there's no meta file or it's unreadable."""
+    meta_path = run_dir / "run_meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return meta.get("status")
 
 
 def _condition_status(n_evals: int, budget: int | None, meta_status: str | None) -> str:
@@ -119,13 +154,13 @@ def _condition_status(n_evals: int, budget: int | None, meta_status: str | None)
     return "complete"
 
 
-def condition_summary(condition_dir: Path) -> dict | None:
+def condition_summary(condition_dir: Path, seed: int | None = None) -> dict | None:
     """Per-condition stats for compare tables (trace plus eval-1 regret, status)."""
-    trace = regret_trace(condition_dir)
+    trace = regret_trace(condition_dir, seed=seed)
     if not trace:
         return None
 
-    state_path = _pick_state(condition_dir)
+    state_path = _pick_state(condition_dir, seed=seed)
     run_dir = state_path.parent
     meta: dict | None = None
     meta_path = run_dir / "run_meta.json"
@@ -239,13 +274,26 @@ def pick_legend_corner(
 
 
 
-def collect_traces(root: Path) -> dict[str, list[float]]:
+def collect_traces(root: Path, seed: int | None = None) -> dict[str, list[float]]:
     traces = {}
     for condition_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        trace = regret_trace(condition_dir)
+        trace = regret_trace(condition_dir, seed=seed)
         if trace:
             traces[condition_dir.name] = trace
     return traces
+
+
+def group_seeds(root: Path) -> list[int]:
+    """Distinct seeds recorded under a compare group, sorted."""
+    seeds: set[int] = set()
+    for condition_dir in root.iterdir() if root.is_dir() else []:
+        if not condition_dir.is_dir():
+            continue
+        for state_path in condition_dir.glob("sandbox_*/state.json"):
+            seed = _sandbox_seed(state_path.parent)
+            if seed is not None:
+                seeds.add(seed)
+    return sorted(seeds)
 
 
 def _chart_svg(traces: dict[str, list[float]], width: int = 820, height: int = 440) -> str:
