@@ -4,7 +4,7 @@ one mean +/- standard-error curve per condition, so a group with seeds
 42/43/44 renders as a single band instead of three overlaid single-seed
 lines. Reuses the scoring in benchmarks.plot_compare rather than
 re-deriving it, so a mean curve here always matches what a single-seed
-`sara-viz` compare view would show for the same sandbox.
+`plugbo-viz` compare view would show for the same sandbox.
 """
 
 from __future__ import annotations

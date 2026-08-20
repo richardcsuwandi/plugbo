@@ -1,5 +1,5 @@
 /* Cross-seed mean +/- standard-error regret viewer. Layout and interaction
-   mirror plugbo's sara-viz compare chart; the only new thing drawn here is
+   mirror plugbo-viz's compare chart; the only new thing drawn here is
    the shaded standard-error band per condition. */
 
 (() => {

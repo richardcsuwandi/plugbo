@@ -394,7 +394,7 @@ async function loadCompareGroups() {
   try {
     const res = await fetch("/api/compare-groups");
     if (!res.ok) {
-      throw new Error(res.status === 404 ? "endpoint missing (restart sara-viz)" : `HTTP ${res.status}`);
+      throw new Error(res.status === 404 ? "endpoint missing (restart plugbo-viz)" : `HTTP ${res.status}`);
     }
     state.compareGroups = await res.json();
   } catch (err) {

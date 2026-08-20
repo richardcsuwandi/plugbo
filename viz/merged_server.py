@@ -1,6 +1,6 @@
 """A second, standalone viewer: overlays mean +/- standard-error regret
 bands across every seed found for each condition in a compare group,
-instead of `sara-viz`'s one-seed-at-a-time view. Stdlib only, no new
+instead of `plugbo-viz`'s one-seed-at-a-time view. Stdlib only, no new
 dependencies: `python3 -m viz.merged_server`.
 """
 
@@ -23,7 +23,7 @@ STATIC_DIR = Path(__file__).parent / "static_merged"
 
 
 def find_merge_groups(root: Path) -> list[dict]:
-    """One entry per compare group (all seeds pooled, unlike sara-viz's
+    """One entry per compare group (all seeds pooled, unlike plugbo-viz's
     Experiments tab which slices seed 42/43/44 into separate rows)."""
     root = root.resolve()
     groups = []

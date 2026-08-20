@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">PlugBO</title>
+  <desc id="desc">A plug mark in a blue-to-orange gradient: two rounded prongs docking into a shared housing.</desc>
+  
+  <defs>
+    <linearGradient id="gFill" x1="18" y1="118" x2="112" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#153A7A"/>
+      <stop offset="32%" stop-color="#1E6BD6"/>
+      <stop offset="58%" stop-color="#E07028"/>
+      <stop offset="100%" stop-color="#F6C56A"/>
+    </linearGradient>
+    <linearGradient id="gL" x1="20" y1="110" x2="80" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1A4B96"/>
+      <stop offset="100%" stop-color="#7EB6F0"/>
+    </linearGradient>
+    <linearGradient id="gR" x1="48" y1="110" x2="116" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C44A14"/>
+      <stop offset="100%" stop-color="#F6C56A"/>
+    </linearGradient>
+    <clipPath id="plugClip">
+      <path d="M22,82 C22,104 40,118 64,118 C88,118 106,104 106,82 L106,68 C106,58.5 99.5,52 94,52 L94,26 C94,17 88,12 83,12 C78,12 72,17 72,26 L72,48 Q72,52 68,52 L60,52 Q56,52 56,48 L56,26 C56,17 50,12 45,12 C40,12 34,17 34,26 L34,52 C26.5,52 22,58.5 22,68 Z"/>
+    </clipPath>
+  </defs>
+
+  <g id="mark">
+    <path d="M22,82 C22,104 40,118 64,118 C88,118 106,104 106,82 L106,68 C106,58.5 99.5,52 94,52 L94,26 C94,17 88,12 83,12 C78,12 72,17 72,26 L72,48 Q72,52 68,52 L60,52 Q56,52 56,48 L56,26 C56,17 50,12 45,12 C40,12 34,17 34,26 L34,52 C26.5,52 22,58.5 22,68 Z" fill="url(#gFill)"/>
+    <g clip-path="url(#plugClip)">
+      <rect x="16" y="8" width="54" height="114" rx="27" fill="url(#gL)" fill-opacity="0.38"/>
+      <rect x="58" y="8" width="54" height="114" rx="27" fill="url(#gR)" fill-opacity="0.38"/>
+    </g>
+  </g>
+
+</svg>

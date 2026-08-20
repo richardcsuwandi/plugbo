@@ -37,8 +37,8 @@ bolt = ["huggingface_hub>=0.24", "safetensors>=0.4"]
 lenz = "lenz.cli:main"
 sara = "sara.cli:main"
 sara-blind-test = "benchmarks.run_blind_test:main"
-sara-viz = "viz.server:main"
-sara-viz-merged = "viz.merged_server:main"
+plugbo-viz = "viz.server:main"
+plugbo-viz-merged = "viz.merged_server:main"
 
 [tool.setuptools.packages.find]
 include = ["lenz*", "sara*", "benchmarks*", "llm*", "viz*"]

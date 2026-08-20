@@ -1,4 +1,6 @@
-# PlugBO
+<p align="center">
+  <img src="assets/logo-lockup.svg" width="280" alt="PlugBO">
+</p>
 
 A modular framework for **agentic Bayesian optimization**.
 
@@ -6,7 +8,7 @@ A modular framework for **agentic Bayesian optimization**.
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml/badge.svg)](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml)
 
-[Install](#install) · [Plugins](#plugins) · [Experiments](#experiments) · [Contributing](#contributing)
+[Blog](https://richardcsuwandi.github.io/blog/2026/plug-bo/) · [Install](#install) · [Plugins](#plugins) · [Experiments](#experiments) · [Contributing](#contributing)
 
 ![PlugBO architecture](assets/architecture.svg)
 
@@ -22,30 +24,36 @@ Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
 instantiates that idea as Sara, a campaign LLM, calling lenz, a BoTorch CLI that
 owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6).
 PlugBO keeps that agent and CLI, then turns the backend into a plugin surface:
-surrogate, region, prior, and sampler are slots. Classical BO methods wrap as
-`lenz` verbs the agent can enable, inspect, or override. The arrangement is
+surrogate, region, prior, and sampler are slots. Existing and new BO modules
+wrap as `lenz` verbs the agent can enable, inspect, or override. The arrangement is
 analogous to [MCP](https://modelcontextprotocol.io/): Sara is the host, with
 only `bash` and `read`, and lenz is the shared tool surface. A BO method
 registers extra verbs there the way an MCP server registers tools, so the agent
 stays fixed while the surrogate, region, prior, or sampler can be swapped in as
 a plugin.
 
-> Note: This is an independent re-implementation of Sara and lenz [[1]](#ref-1).
-> It is not an official Meta repository.
+> Note: PlugBO is not an official implementation of Meta's agentic BO paper
+> [[1]](#ref-1). What is new here is the plugin protocol, together with new
+> experiments and results.
+
+The [technical blog post](https://richardcsuwandi.github.io/blog/2026/plug-bo/)
+covers the implementation, experimental setup, and results in more detail.
 
 #### Why PlugBO?
 
-* Sara stays a two-tool agent (`bash`, `read`). New capability is a `lenz`
-  verb, not a new agent tool, so the agent surface does not grow per method.
-* Classical BO methods (CAKE, TuRBO, πBO, LLAMBO) occupy plugin slots
-  (surrogate, region, prior, sampler) instead of forking the optimization
-  loop.
-* Ships an anti-memorization benchmarking harness: blind/revealed disclosure
-  levels and `gp_sample<dim>` no-prior controls, so an LLM-in-the-loop
-  comparison is not secretly a retrieval test.
-* Cross-seed aggregation and a merged viewer (`viz/aggregate.py`,
-  `viz/merged_server.py`) read a condition as a mean ± SE band across seeds
-  instead of one noisy line.
+* Puts an LLM in charge of a live BO campaign. The agent can inspect trials
+  and change the surrogate, bounds, or acquisition mid-run, while BoTorch
+  still keeps the posterior.
+* Lets you use existing and new BO modules (CAKE, TuRBO, πBO, LLAMBO) in that
+  same campaign. Enable one with a `lenz` command; you do not maintain a
+  separate optimizer per method.
+* Makes it straightforward to add a new method as a plugin, without changing
+  the agent or discarding completed trials.
+* Includes a comparison harness for synthetic functions and mixed-type tasks
+  such as LoRA hyperparameter optimization, with runs that hide the function
+  name so an LLM comparison is not a retrieval test.
+* Plots repeated seeds as a mean ± SE band in a local viewer, so a condition
+  is not judged from one noisy curve.
 
 ---
 
@@ -77,7 +85,8 @@ pip install -e ".[bolt]"   # LoRA HPO emulator (BoLT)
 
 Sara, lenz, and the BO methods are the same kind of piece: modules on one
 control plane. Sara is the host (`bash` and `read`). lenz is the tool surface.
-CAKE, TuRBO, πBO, and LLAMBO occupy slots on that surface.
+Existing and new BO modules (CAKE, TuRBO, πBO, LLAMBO) occupy slots on that
+surface.
 
 | Module | Role | Default | Occupant | Commands |
 |---|---|---|---|---|
@@ -156,8 +165,10 @@ register it in `registry.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Experiments
 
-Synthetic functions use an anti-memorization sandbox (renamed parameters, unit
-cube, shifted optimum). Scoring uses a hidden answer key. List functions:
+Textbook functions such as Hartmann and Ackley have published optima that an
+LLM can recall. The synthetic harness therefore uses an anti-memorization
+sandbox: renamed parameters, a unit cube, and a shifted optimum. Scoring
+uses a hidden answer key outside the sandbox. List functions:
 
 ```bash
 python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
@@ -171,25 +182,38 @@ python3 -c "from benchmarks.functions import REGISTRY; print(sorted(REGISTRY))"
 ./scripts/run_synthetic.sh hartmann6 --warmup 7
 ```
 
-`--disclosure` is `blind` (default), `revealed`, `revealed-shift`, or `all`.
+`--disclosure` controls how much identity the agent sees:
+
+* `blind` (default): renamed parameters, unit cube, shifted optimum, generic
+  problem text. This is the search comparison, not a retrieval test.
+* `revealed-shift`: real name and bounds, same shift as the blind run.
+  Search is still required.
+* `revealed`: the textbook problem, unshifted. The headline metric is
+  whether evaluation 1 is already the known optimum.
+* `all`: run the three levels. Needs a single `--backend`.
+
 `--backend` is a comma list (`vanilla`, `cake`, `turbo`, `sara-lenz`,
 `sara-lenz-cake`, `sara-only`), or `all` for vanilla + sara-lenz +
-`sara-lenz-cake`. `--disclosure all` needs a single backend. Every backend
-uses the same seeded Sobol warm-start, defaulting to `d+1` evaluations when a
-seed is set. Pass `--warmup N` to override it for all selected backends.
+`sara-lenz-cake`. Every backend uses the same seeded Sobol warm-start,
+defaulting to `d+1` evaluations when a seed is set. Pass `--warmup N` to
+override it for all selected backends.
 
-To rerun only Sara-only in an existing synthetic comparison with the same
-warm-start:
+`gp_sample<dim>` is a no-prior control (a fresh GP sample path, not in
+`REGISTRY`). Run it the same way as `hartmann6`.
 
-```bash
-./scripts/rerun_sara_only.sh hartmann6
-```
-
-### LoRA optimization
+### LoRA hyperparameter optimization
 
 The mixed-type experiment is LoRA hyperparameter optimization on
-BoLT (Black-box Optimization for LLM Tasks) [[7]](#ref-7), a benchmark
-of expensive LLM objectives (always revealed, no textbook optimum):
+BoLT (Black-box Optimization for LLM Tasks) [[7]](#ref-7). There is no
+textbook optimum to recall. The oracle is a deterministic emulator of
+expensive LLM fine-tuning runs. The search space is always revealed (seven
+mixed continuous, integer, and categorical variables). `--context` only
+changes the story the agent reads, not the space:
+
+* `domain` (default): real LoRA/Qwen names and a short task description.
+* `generic`: names, types, and bounds only. No domain prose.
+* `misleading`: false LoRA folklore (dropout near 0.05, `lora_target = 0`,
+  few layers) presented as known-good defaults.
 
 ```bash
 pip install -e '.[bolt]'
@@ -198,21 +222,29 @@ pip install -e '.[bolt]'
 ./scripts/run_bolt.sh --context generic
 ```
 
-`--context` is `domain` (default), `generic`, or `misleading`.
-
 Provider and model come from `.env` or `PROVIDER` / `MODEL`. Completed and
 in-flight legs are skipped. Plots land in `compare.html` next to the run, or
-open `sara-viz`.
+open `plugbo-viz`.
 
 ---
 
-## Run viewer (`sara-viz`)
+## Run viewer
+
+`plugbo-viz` is a local UI over campaign logs. Open a run to read the trial
+table, the agent trace, tool-use over the campaign, and (when CAKE is on)
+the kernel population. Search the sidebar, tick several runs to overlay
+them, or switch to Experiments to put every condition in a group on one
+regret chart.
 
 ```bash
-sara-viz
-sara-viz --root ./results/logs --port 9000
+plugbo-viz
+plugbo-viz --root ./results/logs --port 9000
 ```
 
+![plugbo-viz Experiments tab comparing backends on Hartmann-6](assets/viz-experiments.png)
+
+You can also run `python3 -m viz.merged_server` to see a single merged regret
+chart for all conditions, or open `plugbo-viz` to compare multiple runs.
 ---
 
 ## Development
@@ -245,9 +277,8 @@ experiment backend.
 ## Citation
 
 If you use PlugBO, please cite this repository (GitHub's cite button uses
-[`CITATION.cff`](CITATION.cff)) and the papers for Sara/lenz and any plugins
-you enable. The Sara/lenz design is Brunzema et al. [[1]](#ref-1). This repo
-is an independent re-implementation.
+[`CITATION.cff`](CITATION.cff)) and the papers for any plugins
+you enable. The Sara/lenz design is from Brunzema et al. [[1]](#ref-1).
 
 ---
 

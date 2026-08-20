@@ -121,4 +121,4 @@ else
 fi
 
 echo
-echo "Open $ROOT/compare.html  (or sara-viz --root $ROOT)"
+echo "Open $ROOT/compare.html  (or plugbo-viz --root $ROOT)"

@@ -1,7 +1,7 @@
 """Overlays best-so-far true-regret curves from multiple blind-test run
 directories (each produced by `run_blind_test.py` or `run_blind_baseline.py`)
 on one chart -- so different conditions (vanilla BO, sara+lenz,
-sara+lenz+cake, ...) can be compared side by side. `sara-viz` only ever shows
+sara+lenz+cake, ...) can be compared side by side. `plugbo-viz` only ever shows
 one run at a time, so this fills the "compare conditions" gap without adding
 a plotting dependency: plain inline SVG, matching the rest of this repo's
 stdlib-only viz.

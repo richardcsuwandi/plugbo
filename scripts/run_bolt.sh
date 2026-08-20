@@ -101,4 +101,4 @@ done
 
 plot_root "$ROOT" "BOLT LoRA HPO ($CONTEXT context, seed $SEED)"
 echo
-echo "Open $ROOT/compare.html  (or sara-viz --root $ROOT)"
+echo "Open $ROOT/compare.html  (or plugbo-viz --root $ROOT)"
