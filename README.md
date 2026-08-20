@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo-lockup.svg" width="280" alt="PlugBO">
+  <img src="assets/logo-lockup-tagline.svg" width="640" alt="PlugBO: Modular Agentic Bayesian Optimization">
 </p>
 
 A modular framework for **agentic Bayesian optimization**.
