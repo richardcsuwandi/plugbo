@@ -21,7 +21,7 @@ suggestions and revise the surrogate, acquisition function, search bounds,
 objectives, or constraints [[1]](#ref-1).
 
 Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
-instantiates that idea as Sara, a campaign LLM, calling lenz, a BoTorch CLI that
+instantiates that idea as Sara, an LLM agent, calling lenz, a BoTorch CLI that
 owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6).
 PlugBO keeps that agent and CLI, then turns the backend into a plugin surface:
 surrogate, region, prior, and sampler are slots. Existing and new BO modules
@@ -41,19 +41,16 @@ covers the implementation, experimental setup, and results in more detail.
 
 #### Why PlugBO?
 
-* Puts an LLM in charge of a live BO campaign. The agent can inspect trials
-  and change the surrogate, bounds, or acquisition mid-run, while BoTorch
-  still keeps the posterior.
-* Lets you use existing and new BO modules (CAKE, TuRBO, πBO, LLAMBO) in that
-  same campaign. Enable one with a `lenz` command; you do not maintain a
-  separate optimizer per method.
-* Makes it straightforward to add a new method as a plugin, without changing
-  the agent or discarding completed trials.
-* Includes a comparison harness for synthetic functions and mixed-type tasks
-  such as LoRA hyperparameter optimization, with runs that hide the function
-  name so an LLM comparison is not a retrieval test.
-* Plots repeated seeds as a mean ± SE band in a local viewer, so a condition
-  is not judged from one noisy curve.
+* Provides a modular and easily extensible interface for composing
+  BO methods. The surrogate, region, prior, and
+  sampler are slots on a shared BoTorch backend.
+* Places an LLM agent in a live BO loop. The agent can inspect trials,
+  query the posterior, and reconfigure slots mid-run, while BoTorch
+  retains the trial log and posterior.
+* Supports future BO development as tools on a shared interface analogous
+  to [MCP](https://modelcontextprotocol.io/). A method registers extra
+  `lenz` verbs the way an MCP server registers tools, so the agent
+  stays fixed while new modules can be plugged in.
 
 ---
 
@@ -85,12 +82,12 @@ pip install -e ".[bolt]"   # LoRA HPO emulator (BoLT)
 
 Sara, lenz, and the BO methods are the same kind of piece: modules on one
 control plane. Sara is the host (`bash` and `read`). lenz is the tool surface.
-Existing and new BO modules (CAKE, TuRBO, πBO, LLAMBO) occupy slots on that
-surface.
+Existing and new BO modules occupy slots on that
+surface. The current version of PlugBO supports the following BO modules:
 
 | Module | Role | Default | Occupant | Commands |
 |---|---|---|---|---|
-| `sara` | campaign agent | — | — | `sara run` |
+| `sara` | search agent | — | — | `sara run` |
 | `lenz` | trial log, posterior, acquisition | BoTorch loop | — | `create`, `suggest`, `submit`, `incumbent` |
 | Surrogate | GP | fixed Matérn | **CAKE** [[2]](#ref-2) | `set-surrogate`, `evolve-kernels`, `kernel-population` |
 | Region | search bounds | box | **TuRBO** [[3]](#ref-3) | `set-region`, `set-bounds`, `turbo status` |
@@ -230,8 +227,8 @@ open `plugbo-viz`.
 
 ## Run viewer
 
-`plugbo-viz` is a local UI over campaign logs. Open a run to read the trial
-table, the agent trace, tool-use over the campaign, and (when CAKE is on)
+`plugbo-viz` is a local UI over run logs. Open a run to read the trial
+table, the agent trace, tool-use over the run, and (when CAKE is on)
 the kernel population. Search the sidebar, tick several runs to overlay
 them, or switch to Experiments to put every condition in a group on one
 regret chart.
