@@ -21,9 +21,9 @@ suggestions and revise the surrogate, acquisition function, search bounds,
 objectives, or constraints [[1]](#ref-1).
 
 Meta's *Agentic Bayesian Optimization through Surrogate-Augmented Autoresearch*
-instantiates that idea as Sara, an LLM agent, calling lenz, a BoTorch CLI that
-owns the trial log, posterior, and acquisition [[1]](#ref-1) [[6]](#ref-6).
-PlugBO keeps that agent and CLI, then turns the backend into a plugin surface:
+instantiates that idea as Sara, an LLM agent, calling lenz, a BoTorch backend that
+owns the trial log and posterior computation [[1]](#ref-1) [[6]](#ref-6).
+PlugBO keeps that agent and backend, then turns the backend into a plugin surface:
 surrogate, region, prior, and sampler are slots. Existing and new BO modules
 wrap as `lenz` verbs the agent can enable, inspect, or override. The arrangement is
 analogous to [MCP](https://modelcontextprotocol.io/): Sara is the host, with
