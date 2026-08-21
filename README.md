@@ -273,9 +273,17 @@ experiment backend.
 
 ## Citation
 
-If you use PlugBO, please cite this repository (GitHub's cite button uses
-[`CITATION.cff`](CITATION.cff)) and the papers for any plugins
-you enable. The Sara/lenz design is from Brunzema et al. [[1]](#ref-1).
+If you use PlugBO in your research, please cite:
+
+```bibtex
+@software{plugbo,
+  title = {PlugBO: A modular framework for agentic Bayesian optimization},
+  author = {Richard Cornelius Suwandi},
+  year = {2026},
+  publisher = {GitHub},
+  url = {https://github.com/richardcsuwandi/plugbo}
+}
+```
 
 ---
 
